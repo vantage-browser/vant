@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cctype>
 #include <filesystem>
 #include <iomanip>
 #include <memory>
@@ -44,6 +45,8 @@ struct WindowState {
     GtkApplication *application{};
     GtkWidget *window{};
     GtkWidget *address{};
+    GtkWidget *address_popover{};
+    GtkWidget *address_suggestions{};
     GtkWidget *reload_stop{};
     GtkWidget *reload_stack{};
     GtkWidget *reload_icon{};
@@ -83,11 +86,73 @@ struct ApplicationState {
 };
 
 void sync_active_chrome(WindowState *state);
+TabState *find_tab(WindowState *state, WebKitWebView *view);
 TabState *new_tab(WindowState *state, const std::string &uri);
 void create_window(ApplicationState *owner, const std::string &initial_uri, bool smoke,
                    WindowState *source, bool private_mode = false);
 std::string format_bytes(std::uint64_t bytes);
 void cancel_download(ApplicationState *owner, std::int64_t id);
+void address_changed(GtkEditable *, WindowState *state);
+
+enum class ContextOpen { tab, window };
+struct ContextOpenData { WindowState *window{}; std::string uri; ContextOpen mode{}; };
+
+void context_open(GSimpleAction *, GVariant *, void *data) {
+    const auto *open = static_cast<const ContextOpenData *>(data);
+    if (open->uri.starts_with("data:image/")) {
+        WindowState *target = open->window;
+        TabState *tab = nullptr;
+        if (open->mode == ContextOpen::window) {
+            create_window(open->window->owner, "vantage:new", false, open->window);
+            target = open->window->owner->windows.back().get();
+            tab = find_tab(target, target->view);
+        } else tab = new_tab(target, "vantage:new");
+        if (tab) {
+            tab->internal_uri.clear();
+            webkit_web_view_load_uri(tab->view, open->uri.c_str());
+        }
+    } else if (open->mode == ContextOpen::tab) new_tab(open->window, open->uri);
+    else create_window(open->window->owner, open->uri, false, open->window);
+}
+
+void append_context_open(WebKitContextMenu *menu, WindowState *window, const char *uri,
+                         const char *label, ContextOpen mode) {
+    auto *action = g_simple_action_new("context-open", nullptr);
+    auto *data = new ContextOpenData{window, uri ? uri : "", mode};
+    g_signal_connect_data(action, "activate", G_CALLBACK(context_open), data,
+        [](void *value, GClosure *) { delete static_cast<ContextOpenData *>(value); }, G_CONNECT_DEFAULT);
+    auto *item = webkit_context_menu_item_new_from_gaction(G_ACTION(action), label, nullptr);
+    webkit_context_menu_append(menu, item);
+    g_object_unref(action);
+}
+
+gboolean context_menu(WebKitWebView *, WebKitContextMenu *menu,
+                      WebKitHitTestResult *hit, TabState *tab) {
+    const bool link = webkit_hit_test_result_context_is_link(hit);
+    const bool image = webkit_hit_test_result_context_is_image(hit);
+    if (!link && !image) return FALSE;
+    webkit_context_menu_remove_all(menu);
+    if (link) {
+        const char *uri = webkit_hit_test_result_get_link_uri(hit);
+        append_context_open(menu, tab->window, uri, "Open link in new tab", ContextOpen::tab);
+        append_context_open(menu, tab->window, uri, "Open link in new window", ContextOpen::window);
+        webkit_context_menu_append(menu, webkit_context_menu_item_new_from_stock_action(
+            WEBKIT_CONTEXT_MENU_ACTION_COPY_LINK_TO_CLIPBOARD));
+    }
+    if (link && image) webkit_context_menu_append(menu, webkit_context_menu_item_new_separator());
+    if (image) {
+        const char *uri = webkit_hit_test_result_get_image_uri(hit);
+        append_context_open(menu, tab->window, uri, "Open image in new tab", ContextOpen::tab);
+        append_context_open(menu, tab->window, uri, "Open image in new window", ContextOpen::window);
+        webkit_context_menu_append(menu, webkit_context_menu_item_new_from_stock_action_with_label(
+            WEBKIT_CONTEXT_MENU_ACTION_DOWNLOAD_IMAGE_TO_DISK, "Save image as…"));
+        webkit_context_menu_append(menu, webkit_context_menu_item_new_from_stock_action(
+            WEBKIT_CONTEXT_MENU_ACTION_COPY_IMAGE_TO_CLIPBOARD));
+        webkit_context_menu_append(menu, webkit_context_menu_item_new_from_stock_action(
+            WEBKIT_CONTEXT_MENU_ACTION_COPY_IMAGE_URL_TO_CLIPBOARD));
+    }
+    return FALSE;
+}
 
 std::int64_t now_seconds() {
     return std::chrono::duration_cast<std::chrono::seconds>(
@@ -327,10 +392,12 @@ struct FaviconRequest {
     WindowState *state{};
     WebKitWebView *view{};
     SoupSession *session{};
+    SoupMessage *message{};
     std::string page_uri;
 };
 
 void finish_favicon_request(FaviconRequest *request) {
+    if (request->message) g_object_unref(request->message);
     if (request->session) g_object_unref(request->session);
     g_object_unref(request->view);
     delete request;
@@ -346,8 +413,11 @@ void fallback_favicon_downloaded(GObject *source, GAsyncResult *result, void *da
         const auto *raw = static_cast<const guchar *>(g_bytes_get_data(bytes, &size));
         if (!request->state->private_mode && raw && size) {
             auto *encoded = g_base64_encode(raw, size);
+            const char *mime = request->message
+                ? soup_message_headers_get_content_type(soup_message_get_response_headers(request->message), nullptr)
+                : nullptr;
             request->state->owner->data->set_favicon(request->page_uri,
-                std::string("data:image/x-icon;base64,") + encoded);
+                std::string("data:") + (mime && *mime ? mime : "image/x-icon") + ";base64," + encoded);
             g_free(encoded);
         }
         if (auto *texture = gdk_texture_new_from_bytes(bytes, &error)) {
@@ -382,6 +452,7 @@ void fallback_favicon_url_ready(GObject *source, GAsyncResult *result, void *dat
         return;
     }
     request->session = soup_session_new();
+    request->message = SOUP_MESSAGE(g_object_ref(message));
     soup_session_send_and_read_async(request->session, message, G_PRIORITY_LOW, nullptr,
         fallback_favicon_downloaded, request);
     g_object_unref(message);
@@ -398,7 +469,7 @@ void load_changed(WebKitWebView *view, WebKitLoadEvent event, TabState *tab) {
     const char *page_uri = webkit_web_view_get_uri(view);
     if (!page_uri || (!g_str_has_prefix(page_uri, "http://") && !g_str_has_prefix(page_uri, "https://"))) return;
     auto *request = new FaviconRequest{tab->window,
-        WEBKIT_WEB_VIEW(g_object_ref(view)), nullptr, page_uri};
+        WEBKIT_WEB_VIEW(g_object_ref(view)), nullptr, nullptr, page_uri};
     constexpr auto script = "document.querySelector('link[rel~=icon]')?.href || new URL('/favicon.ico',location.href).href";
     webkit_web_view_evaluate_javascript(view, script, -1, nullptr, nullptr, nullptr,
         fallback_favicon_url_ready, request);
@@ -844,6 +915,53 @@ void clear_box(GtkWidget *box) {
     while (auto *child = gtk_widget_get_first_child(box)) gtk_box_remove(GTK_BOX(box), child);
 }
 
+void history_suggestion_clicked(GtkButton *button, WindowState *state) {
+    const auto *uri = static_cast<const char *>(g_object_get_data(G_OBJECT(button), "suggestion-uri"));
+    if (!uri) return;
+    gtk_popover_popdown(GTK_POPOVER(state->address_popover));
+    gtk_editable_set_text(GTK_EDITABLE(state->address), uri);
+    submit_address(nullptr, state);
+}
+
+void address_changed(GtkEditable *editable, WindowState *state) {
+    if (!gtk_widget_has_focus(state->address)) return;
+    const std::string query = gtk_editable_get_text(editable);
+    clear_box(state->address_suggestions);
+    if (query.empty()) {
+        gtk_popover_popdown(GTK_POPOVER(state->address_popover));
+        return;
+    }
+    std::string needle = query;
+    std::ranges::transform(needle, needle.begin(), [](unsigned char value) { return std::tolower(value); });
+    std::vector<std::string> seen;
+    unsigned shown = 0;
+    for (const auto &entry : state->owner->data->history()) {
+        std::string searchable = entry.title + " " + entry.uri;
+        std::ranges::transform(searchable, searchable.begin(), [](unsigned char value) { return std::tolower(value); });
+        if (searchable.find(needle) == std::string::npos || std::ranges::find(seen, entry.uri) != seen.end()) continue;
+        seen.push_back(entry.uri);
+        auto *button = gtk_button_new();
+        gtk_widget_add_css_class(button, "address-suggestion");
+        auto *labels = gtk_box_new(GTK_ORIENTATION_VERTICAL, 1);
+        auto *title = gtk_label_new((entry.title.empty() ? entry.uri : entry.title).c_str());
+        auto *uri = gtk_label_new(entry.uri.c_str());
+        gtk_widget_add_css_class(uri, "suggestion-uri");
+        gtk_widget_set_halign(title, GTK_ALIGN_START);
+        gtk_widget_set_halign(uri, GTK_ALIGN_START);
+        gtk_label_set_ellipsize(GTK_LABEL(title), PANGO_ELLIPSIZE_END);
+        gtk_label_set_ellipsize(GTK_LABEL(uri), PANGO_ELLIPSIZE_MIDDLE);
+        gtk_box_append(GTK_BOX(labels), title);
+        gtk_box_append(GTK_BOX(labels), uri);
+        gtk_button_set_child(GTK_BUTTON(button), labels);
+        g_object_set_data_full(G_OBJECT(button), "suggestion-uri", g_strdup(entry.uri.c_str()), g_free);
+        g_signal_connect(button, "clicked", G_CALLBACK(history_suggestion_clicked), state);
+        gtk_box_append(GTK_BOX(state->address_suggestions), button);
+        if (++shown == 8) break;
+    }
+    if (shown) gtk_popover_popup(GTK_POPOVER(state->address_popover));
+    else gtk_popover_popdown(GTK_POPOVER(state->address_popover));
+}
+
 GtkWidget *download_row(const std::string &name, const std::string &detail, bool active) {
     auto *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
     gtk_widget_add_css_class(row, "download-row");
@@ -856,6 +974,8 @@ GtkWidget *download_row(const std::string &name, const std::string &detail, bool
     gtk_label_set_ellipsize(GTK_LABEL(title), PANGO_ELLIPSIZE_END);
     gtk_widget_set_halign(title, GTK_ALIGN_START);
     auto *status = gtk_label_new(detail.c_str());
+    gtk_label_set_ellipsize(GTK_LABEL(status), PANGO_ELLIPSIZE_MIDDLE);
+    gtk_label_set_max_width_chars(GTK_LABEL(status), 48);
     gtk_widget_add_css_class(status, "download-detail");
     gtk_widget_set_halign(status, GTK_ALIGN_START);
     gtk_box_append(GTK_BOX(labels), title);
@@ -945,11 +1065,26 @@ gboolean window_closing(GtkWindow *, WindowState *state) {
 }
 
 gboolean download_destination(WebKitDownload *download, const char *suggested, DownloadContext *context) {
+    const char *source = webkit_uri_request_get_uri(webkit_download_get_request(download));
+    const bool needs_safe_name = !suggested || std::string_view(suggested).size() > 180 ||
+        (source && g_str_has_prefix(source, "data:"));
+    if (!needs_safe_name) return FALSE;
     const char *downloads = g_get_user_special_dir(G_USER_DIRECTORY_DOWNLOAD);
     std::filesystem::path directory = downloads ? downloads : g_get_home_dir();
     std::error_code directory_error;
     std::filesystem::create_directories(directory, directory_error);
-    auto destination = vantage::safe_download_path(directory, suggested ? suggested : "download");
+    std::string filename = suggested ? suggested : "download";
+    if (filename.size() > 180 || (source && g_str_has_prefix(source, "data:"))) {
+        std::string extension = ".bin";
+        auto *response = webkit_download_get_response(download);
+        const char *mime = response ? webkit_uri_response_get_mime_type(response) : nullptr;
+        if (mime && g_str_has_prefix(mime, "image/")) {
+            const std::string_view type = mime + 6;
+            extension = type == "svg+xml" ? ".svg" : type == "jpeg" ? ".jpg" : "." + std::string(type);
+        }
+        filename = "image" + extension;
+    }
+    auto destination = vantage::safe_download_path(directory, filename);
     for (unsigned suffix = 1; std::filesystem::exists(destination); ++suffix) {
         const auto stem = destination.stem().string();
         const auto extension = destination.extension().string();
@@ -963,29 +1098,41 @@ gboolean download_destination(WebKitDownload *download, const char *suggested, D
     }
     webkit_download_set_destination(download, uri);
     context->destination = destination.string();
-    const char *source = webkit_uri_request_get_uri(webkit_download_get_request(download));
-    if (!context->private_mode)
-        context->record = context->owner->data->add_download(source ? source : "", destination.string(), "downloading", now_seconds());
-    refresh_download_chrome(context->owner);
     g_free(uri);
     return TRUE;
 }
 
-void download_failed(WebKitDownload *, GError *, DownloadContext *context) {
+void download_created_destination(WebKitDownload *download, const char *destination, DownloadContext *context) {
+    GError *error = nullptr;
+    auto *path = destination ? g_filename_from_uri(destination, nullptr, &error) : nullptr;
+    if (path) context->destination = path;
+    g_free(path);
+    if (error) g_error_free(error);
+    const char *source = webkit_uri_request_get_uri(webkit_download_get_request(download));
+    if (!context->private_mode && context->record == 0)
+        context->record = context->owner->data->add_download(source ? source : "", context->destination,
+            "downloading", now_seconds());
+    refresh_download_chrome(context->owner);
+}
+
+void download_failed(WebKitDownload *, GError *error, DownloadContext *context) {
     context->failed = true;
-    if (!context->private_mode && !context->cancelled)
-        context->owner->data->update_download(context->record, "failed");
+    if (!context->private_mode && context->record != 0 && !context->cancelled) {
+        const std::string status = error && error->message ? "failed: " + std::string(error->message) : "failed";
+        context->owner->data->update_download(context->record, status);
+    }
 }
 void download_received(WebKitDownload *download, guint64, DownloadContext *context) {
     const auto received = webkit_download_get_received_data_length(download);
     auto *response = webkit_download_get_response(download);
     const auto total = response && webkit_uri_response_get_content_length(response) > 0
         ? static_cast<std::uint64_t>(webkit_uri_response_get_content_length(response)) : 0;
-    if (!context->private_mode) context->owner->data->update_download_progress(context->record, received, total);
+    if (!context->private_mode && context->record != 0)
+        context->owner->data->update_download_progress(context->record, received, total);
     refresh_download_chrome(context->owner);
 }
 void download_finished(WebKitDownload *download, DownloadContext *context) {
-    if (!context->failed && !context->cancelled && !context->private_mode) {
+    if (!context->failed && !context->cancelled && !context->private_mode && context->record != 0) {
         const auto received = webkit_download_get_received_data_length(download);
         auto *response = webkit_download_get_response(download);
         const auto total = response && webkit_uri_response_get_content_length(response) > 0
@@ -1008,6 +1155,7 @@ void download_started(WebKitNetworkSession *, WebKitDownload *download, Applicat
     owner->active_downloads.push_back(context);
     refresh_download_chrome(owner);
     g_signal_connect(download, "decide-destination", G_CALLBACK(download_destination), context);
+    g_signal_connect(download, "created-destination", G_CALLBACK(download_created_destination), context);
     g_signal_connect(download, "failed", G_CALLBACK(download_failed), context);
     g_signal_connect(download, "received-data", G_CALLBACK(download_received), context);
     g_signal_connect(download, "finished", G_CALLBACK(download_finished), context);
@@ -1079,8 +1227,8 @@ gboolean select_address_deferred(void *data) {
     return G_SOURCE_REMOVE;
 }
 
-void address_pressed(GtkGestureClick *, int, double, double, WindowState *state) {
-    if (!gtk_widget_has_focus(state->address)) g_idle_add(select_address_deferred, state);
+void address_focus_changed(GtkWidget *widget, GParamSpec *, WindowState *state) {
+    if (gtk_widget_has_focus(widget)) g_idle_add(select_address_deferred, state);
 }
 
 TabState *new_tab(WindowState *state, const std::string &uri) {
@@ -1155,6 +1303,7 @@ TabState *new_tab(WindowState *state, const std::string &uri) {
     g_signal_connect(tab->view, "load-changed", G_CALLBACK(load_changed), tab);
     g_signal_connect(tab->view, "load-failed", G_CALLBACK(load_failed), tab);
     g_signal_connect(tab->view, "decide-policy", G_CALLBACK(decide_policy), tab);
+    g_signal_connect(tab->view, "context-menu", G_CALLBACK(context_menu), tab);
     g_signal_connect(tab->view, "load-failed-with-tls-errors", G_CALLBACK(tls_failed), tab);
 
     state->tabs.push_back(std::move(owned));
@@ -1262,6 +1411,9 @@ void install_style(GtkWidget *window) {
         ".toolbar .stop-icon { font-size: 27px; font-weight: 400; }"
         ".address-wrap entry { min-height: 30px; padding: 0 38px 0 12px; border-radius: 8px; border: 1px solid #45433f; background: #191918; color: #f1ede3; box-shadow: none; }"
         ".toolbar entry:focus { border-color: #ff8a62; box-shadow: 0 0 0 1px #ff8a62; }"
+        ".address-suggestions contents { padding: 7px; border: 1px solid #474641; border-radius: 10px; background: #2c2c2c; }"
+        ".address-suggestion { min-width: 520px; padding: 8px 11px; border: 0; border-radius: 7px; background: transparent; color: #eee9df; box-shadow: none; }"
+        ".address-suggestion:hover { background: #45433f; }.address-suggestion .suggestion-uri { color: #aaa59c; font-size: 12px; }"
         ".address-bookmark { margin-right: 4px; }"
         ".main-menu contents { padding: 8px; border: 1px solid #474641; border-radius: 12px; background: #2c2c2c; }"
         ".main-menu .menu-item { padding: 8px 10px; border: 0; border-radius: 7px; background: transparent; color: #eee9df; box-shadow: none; }"
@@ -1380,6 +1532,13 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     gtk_widget_add_css_class(address_wrap, "address-wrap");
     gtk_widget_set_hexpand(address_wrap, TRUE);
     gtk_overlay_set_child(GTK_OVERLAY(address_wrap), state->address);
+    state->address_popover = gtk_popover_new();
+    gtk_widget_add_css_class(state->address_popover, "address-suggestions");
+    gtk_popover_set_position(GTK_POPOVER(state->address_popover), GTK_POS_BOTTOM);
+    gtk_popover_set_has_arrow(GTK_POPOVER(state->address_popover), FALSE);
+    state->address_suggestions = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+    gtk_popover_set_child(GTK_POPOVER(state->address_popover), state->address_suggestions);
+    gtk_widget_set_parent(state->address_popover, address_wrap);
     state->bookmark_button = icon_button("non-starred-symbolic", "Bookmark this tab");
     gtk_widget_add_css_class(state->bookmark_button, "address-bookmark");
     gtk_widget_set_halign(state->bookmark_button, GTK_ALIGN_END);
@@ -1441,10 +1600,8 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     g_signal_connect(forward, "clicked", G_CALLBACK(go_forward), state);
     g_signal_connect(state->reload_stop, "clicked", G_CALLBACK(reload_or_stop), state);
     g_signal_connect(state->address, "activate", G_CALLBACK(submit_address), state);
-    auto *address_click = gtk_gesture_click_new();
-    gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(address_click), GTK_PHASE_CAPTURE);
-    g_signal_connect(address_click, "pressed", G_CALLBACK(address_pressed), state);
-    gtk_widget_add_controller(state->address, GTK_EVENT_CONTROLLER(address_click));
+    g_signal_connect(state->address, "changed", G_CALLBACK(address_changed), state);
+    g_signal_connect(state->address, "notify::has-focus", G_CALLBACK(address_focus_changed), state);
     g_signal_connect(state->bookmark_button, "clicked", G_CALLBACK(toggle_bookmark), state);
     g_signal_connect(new_button, "clicked", G_CALLBACK(add_tab), state);
     auto *keys = gtk_event_controller_key_new();
