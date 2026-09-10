@@ -1,10 +1,12 @@
 CXX ?= c++
+PKG_CONFIG ?= pkg-config
 CPPFLAGS := -Isrc
 CXXFLAGS ?= -std=c++20 -O2 -Wall -Wextra -Wpedantic -Werror
-NATIVE_CFLAGS := $(shell pkg-config --cflags gtk4 webkitgtk-6.0)
-NATIVE_LIBS := $(shell pkg-config --libs gtk4 webkitgtk-6.0)
-SQLITE_CFLAGS := $(shell pkg-config --cflags sqlite3)
-SQLITE_LIBS := $(shell pkg-config --libs sqlite3)
+REQUIRED_PACKAGES := gtk4 webkitgtk-6.0 sqlite3
+NATIVE_CFLAGS = $(shell $(PKG_CONFIG) --cflags gtk4 webkitgtk-6.0)
+NATIVE_LIBS = $(shell $(PKG_CONFIG) --libs gtk4 webkitgtk-6.0)
+SQLITE_CFLAGS = $(shell $(PKG_CONFIG) --cflags sqlite3)
+SQLITE_LIBS = $(shell $(PKG_CONFIG) --libs sqlite3)
 BUILD := build
 CORE_SOURCES := src/application.cpp src/navigation.cpp src/browser_model.cpp src/session_store.cpp src/user_data.cpp
 CORE_OBJECTS := $(CORE_SOURCES:src/%.cpp=$(BUILD)/%.o)
@@ -12,16 +14,31 @@ JSPP_DIR := third_party/jspp
 JSPP_SOURCES := $(filter-out $(JSPP_DIR)/src/main.cpp,$(wildcard $(JSPP_DIR)/src/*.cpp))
 JSPP_OBJECTS := $(JSPP_SOURCES:$(JSPP_DIR)/src/%.cpp=$(BUILD)/jspp/%.o)
 
-.PHONY: all test test-unit test-sanitize smoke smoke-native benchmark evidence clean
-all: $(BUILD)/vant
+.PHONY: all deps test test-unit test-sanitize smoke smoke-native benchmark evidence clean
+all: deps $(BUILD)/vant
+
+deps:
+	@if ! command -v "$(PKG_CONFIG)" >/dev/null 2>&1; then \
+		echo "error: pkg-config is required." >&2; \
+		echo "Ubuntu: sudo apt install build-essential pkg-config python3 libgtk-4-dev libwebkitgtk-6.0-dev libsqlite3-dev" >&2; \
+		echo "Omarchy/Arch: sudo pacman -S --needed base-devel pkgconf python gtk4 webkitgtk-6.0 sqlite" >&2; \
+		exit 1; \
+	fi
+	@if ! $(PKG_CONFIG) --exists $(REQUIRED_PACKAGES); then \
+		echo "error: Vantage development packages are missing." >&2; \
+		echo "Ubuntu: sudo apt install build-essential pkg-config python3 libgtk-4-dev libwebkitgtk-6.0-dev libsqlite3-dev" >&2; \
+		echo "Omarchy/Arch: sudo pacman -S --needed base-devel pkgconf python gtk4 webkitgtk-6.0 sqlite" >&2; \
+		echo "Then run: pkg-config --modversion $(REQUIRED_PACKAGES)" >&2; \
+		exit 1; \
+	fi
 
 $(BUILD):
 	mkdir -p $(BUILD)
 
-$(BUILD)/%.o: src/%.cpp | $(BUILD)
+$(BUILD)/%.o: src/%.cpp | deps $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c $< -o $@
 
-$(BUILD)/native_app.o: src/native_app.cpp src/native_app.h | $(BUILD)
+$(BUILD)/native_app.o: src/native_app.cpp src/native_app.h | deps $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(NATIVE_CFLAGS) -c $< -o $@
 
 $(BUILD)/jspp:
@@ -78,7 +95,7 @@ smoke-native: $(BUILD)/vant
 
 test: test-unit smoke
 
-test-sanitize:
+test-sanitize: deps
 	mkdir -p $(BUILD)/san
 	$(CXX) $(CPPFLAGS) -std=c++20 -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -Wall -Wextra -Wpedantic -Werror tests/application.cpp $(CORE_SOURCES) $(SQLITE_LIBS) -o $(BUILD)/san/test_application
 	$(CXX) $(CPPFLAGS) -std=c++20 -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -Wall -Wextra -Wpedantic -Werror tests/navigation.cpp $(CORE_SOURCES) $(SQLITE_LIBS) -o $(BUILD)/san/test_navigation
@@ -98,10 +115,10 @@ test-sanitize:
 vendor-check:
 	python3 tools/vendor_jspp.py --check
 
-evidence: all
+evidence: deps all
 	python3 tools/record_environment.py --output $(BUILD)/environment.json
 
-$(BUILD)/benchmark_model: benchmarks/model.cpp $(CORE_OBJECTS)
+$(BUILD)/benchmark_model: benchmarks/model.cpp $(CORE_OBJECTS) | deps
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(SQLITE_CFLAGS) $^ $(SQLITE_LIBS) -o $@
 
 benchmark: $(BUILD)/benchmark_model

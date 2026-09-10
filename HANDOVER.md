@@ -280,6 +280,8 @@ rehearsed. A failed gate stops the release; do not weaken or silently skip it.
 
 ## Working rules
 
+- Keep the root `README.md` installation, build, run and test instructions usable
+  from a clean supported system whenever dependencies or commands change.
 - Inspect this file, the current checkpoint evidence and repository status before
   substantial work.
 - Keep each checkpoint reviewable and commit it independently when authorised.

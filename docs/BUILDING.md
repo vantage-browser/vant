@@ -1,5 +1,8 @@
 # Building Vantage
 
+Start with the complete development setup and run instructions in the repository
+root [`README.md`](../README.md). This file records evidence-specific details.
+
 Vantage requires a C++20 compiler, GNU Make, Python 3, GTK 4 and WebKitGTK 6.0. Build and
 run its evidence gates with:
 
