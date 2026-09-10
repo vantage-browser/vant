@@ -21,6 +21,9 @@ struct TabState {
     WebKitWebView *view{};
     GtkWidget *tab{};
     GtkWidget *label{};
+    GtkWidget *icon_stack{};
+    GtkWidget *favicon{};
+    GtkWidget *spinner{};
     std::string internal_uri;
 };
 
@@ -29,7 +32,6 @@ struct WindowState {
     GtkWidget *window{};
     GtkWidget *address{};
     GtkWidget *reload_stop{};
-    GtkWidget *spinner{};
     GtkWidget *progress{};
     GtkWidget *tab_box{};
     GtkWidget *stack{};
@@ -64,8 +66,10 @@ void load_decision(TabState *tab, const vantage::NavigationDecision &decision) {
 
 void submit_address(GtkEntry *, WindowState *state) {
     const char *text = gtk_editable_get_text(GTK_EDITABLE(state->address));
-    if (auto *tab = find_tab(state, state->view))
+    if (auto *tab = find_tab(state, state->view)) {
         load_decision(tab, state->policy.resolve(text ? text : ""));
+        gtk_widget_grab_focus(GTK_WIDGET(tab->view));
+    }
 }
 
 void go_back(GtkButton *, WindowState *state) {
@@ -85,27 +89,48 @@ void reload_or_stop(GtkButton *, WindowState *state) {
 void sync_active_chrome(WindowState *state) {
     if (!state->view) return;
     const bool loading = webkit_web_view_is_loading(state->view);
-    gtk_button_set_icon_name(GTK_BUTTON(state->reload_stop),
-        loading ? "process-stop-symbolic" : "view-refresh-symbolic");
+    if (loading) {
+        gtk_button_set_label(GTK_BUTTON(state->reload_stop), "×");
+        gtk_widget_add_css_class(state->reload_stop, "stop-loading");
+    } else {
+        gtk_button_set_icon_name(GTK_BUTTON(state->reload_stop), "view-refresh-symbolic");
+        gtk_widget_remove_css_class(state->reload_stop, "stop-loading");
+    }
     gtk_widget_set_tooltip_text(state->reload_stop, loading ? "Stop loading" : "Reload");
-    gtk_widget_set_visible(state->spinner, loading);
     gtk_widget_set_visible(state->progress, loading);
-    if (loading) gtk_spinner_start(GTK_SPINNER(state->spinner));
-    else gtk_spinner_stop(GTK_SPINNER(state->spinner));
     gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(state->progress),
         webkit_web_view_get_estimated_load_progress(state->view));
 
     if (auto *tab = find_tab(state, state->view)) {
         const char *uri = webkit_web_view_get_uri(state->view);
         const std::string shown = !tab->internal_uri.empty() ? tab->internal_uri : (uri ? uri : "");
-        gtk_editable_set_text(GTK_EDITABLE(state->address), shown.c_str());
+        if (!gtk_widget_has_focus(state->address))
+            gtk_editable_set_text(GTK_EDITABLE(state->address), shown.c_str());
         const char *title = webkit_web_view_get_title(state->view);
         gtk_window_set_title(GTK_WINDOW(state->window), title && *title ? title : "Vantage Browser");
     }
 }
 
+void sync_tab_activity(TabState *tab) {
+    const bool loading = webkit_web_view_is_loading(tab->view);
+    if (loading) {
+        gtk_spinner_start(GTK_SPINNER(tab->spinner));
+        gtk_stack_set_visible_child(GTK_STACK(tab->icon_stack), tab->spinner);
+    } else {
+        gtk_spinner_stop(GTK_SPINNER(tab->spinner));
+        gtk_stack_set_visible_child(GTK_STACK(tab->icon_stack), tab->favicon);
+    }
+}
+
 void loading_changed(WebKitWebView *view, GParamSpec *, TabState *tab) {
+    sync_tab_activity(tab);
     if (tab->window->view == view) sync_active_chrome(tab->window);
+}
+
+void favicon_changed(WebKitWebView *, GParamSpec *, TabState *tab) {
+    if (auto *favicon = webkit_web_view_get_favicon(tab->view))
+        gtk_image_set_from_paintable(GTK_IMAGE(tab->favicon), GDK_PAINTABLE(favicon));
+    sync_tab_activity(tab);
 }
 
 void progress_changed(WebKitWebView *view, GParamSpec *, TabState *tab) {
@@ -120,7 +145,8 @@ void uri_changed(WebKitWebView *view, GParamSpec *, TabState *tab) {
     if (!tab->internal_uri.empty() && (!uri || std::string_view(uri) == "about:blank")) return;
     if (uri) {
         tab->internal_uri.clear();
-        gtk_editable_set_text(GTK_EDITABLE(tab->window->address), uri);
+        if (!gtk_widget_has_focus(tab->window->address))
+            gtk_editable_set_text(GTK_EDITABLE(tab->window->address), uri);
     }
 }
 
@@ -139,6 +165,7 @@ gboolean decide_policy(WebKitWebView *, WebKitPolicyDecision *decision,
     auto *action = webkit_navigation_policy_decision_get_navigation_action(navigation);
     auto *request = webkit_navigation_action_get_request(action);
     const char *uri = webkit_uri_request_get_uri(request);
+    if (!tab->internal_uri.empty() && uri && std::string_view(uri) == "about:blank") return FALSE;
     const auto resolved = tab->window->policy.resolve(uri ? uri : "");
     if (resolved.kind == vantage::NavigationKind::web) return FALSE;
     webkit_policy_decision_ignore(decision);
@@ -203,10 +230,21 @@ TabState *new_tab(WindowState *state, const std::string &uri) {
     gtk_widget_add_css_class(tab->tab, "browser-tab");
     auto *select = gtk_button_new();
     gtk_widget_add_css_class(select, "tab-select");
+    auto *tab_content = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 7);
+    tab->icon_stack = gtk_stack_new();
+    gtk_widget_set_size_request(tab->icon_stack, 16, 16);
+    tab->favicon = gtk_image_new_from_icon_name("web-browser-symbolic");
+    gtk_image_set_pixel_size(GTK_IMAGE(tab->favicon), 16);
+    tab->spinner = gtk_spinner_new();
+    gtk_widget_set_size_request(tab->spinner, 16, 16);
+    gtk_stack_add_child(GTK_STACK(tab->icon_stack), tab->favicon);
+    gtk_stack_add_child(GTK_STACK(tab->icon_stack), tab->spinner);
     tab->label = gtk_label_new("New tab");
     gtk_label_set_ellipsize(GTK_LABEL(tab->label), PANGO_ELLIPSIZE_END);
     gtk_label_set_max_width_chars(GTK_LABEL(tab->label), 24);
-    gtk_button_set_child(GTK_BUTTON(select), tab->label);
+    gtk_box_append(GTK_BOX(tab_content), tab->icon_stack);
+    gtk_box_append(GTK_BOX(tab_content), tab->label);
+    gtk_button_set_child(GTK_BUTTON(select), tab_content);
     auto *close = icon_button("window-close-symbolic", "Close tab");
     gtk_widget_add_css_class(close, "tab-close");
     gtk_box_append(GTK_BOX(tab->tab), select);
@@ -219,11 +257,15 @@ TabState *new_tab(WindowState *state, const std::string &uri) {
     g_signal_connect(tab->view, "notify::title", G_CALLBACK(title_changed), tab);
     g_signal_connect(tab->view, "notify::is-loading", G_CALLBACK(loading_changed), tab);
     g_signal_connect(tab->view, "notify::estimated-load-progress", G_CALLBACK(progress_changed), tab);
+    g_signal_connect(tab->view, "notify::favicon", G_CALLBACK(favicon_changed), tab);
     g_signal_connect(tab->view, "decide-policy", G_CALLBACK(decide_policy), tab);
     g_signal_connect(tab->view, "load-failed-with-tls-errors", G_CALLBACK(tls_failed), tab);
 
     state->tabs.push_back(std::move(owned));
     select_tab(tab);
+    auto *session = webkit_web_view_get_network_session(tab->view);
+    auto *data_manager = webkit_network_session_get_website_data_manager(session);
+    webkit_website_data_manager_set_favicons_enabled(data_manager, TRUE);
     load_decision(tab, state->policy.resolve(uri));
     return tab;
 }
@@ -276,21 +318,25 @@ void install_style(GtkWidget *window) {
         "window { background: #171716; color: #ece8df; }"
         "headerbar { min-height: 34px; padding: 0 6px; background: #242423; box-shadow: none; border-bottom: 1px solid #393936; }"
         ".tab-strip { margin-top: 3px; }"
-        ".browser-tab { min-width: 150px; margin-right: 2px; border-radius: 8px 8px 0 0; background: #2d2d2b; }"
-        ".browser-tab.active { background: #3a3936; }"
+        ".browser-tab { min-width: 150px; margin-right: 2px; border-radius: 9px 9px 0 0; background: transparent; }"
+        ".browser-tab:hover { background: #343432; }"
+        ".browser-tab.active, .browser-tab.active:hover { background: #41403d; }"
         ".browser-tab button { min-height: 28px; padding: 0 7px; border: 0; background: transparent; box-shadow: none; color: #d8d4cc; }"
         ".browser-tab .tab-select { min-width: 112px; }"
-        ".browser-tab .tab-close { min-width: 20px; padding: 0 4px; }"
-        ".browser-tab button:hover { background: #494741; }"
+        ".browser-tab .tab-close { min-width: 20px; padding: 0 4px; opacity: 0; }"
+        ".browser-tab:hover .tab-close, .browser-tab.active .tab-close { opacity: 1; }"
+        ".browser-tab button:hover { background: transparent; }"
+        ".browser-tab .tab-close:hover { border-radius: 999px; background: #5a5751; }"
         ".new-tab { min-width: 28px; min-height: 28px; margin-left: 3px; }"
         ".navigation { background: #242423; border-bottom: 1px solid #393936; }"
         ".toolbar { padding: 6px 8px; }"
         ".toolbar button.flat, .new-tab.flat { min-width: 28px; min-height: 28px; padding: 2px; border: 0; border-radius: 7px; background: transparent; color: #d8d4cc; box-shadow: none; }"
         ".toolbar button.flat:hover, .new-tab.flat:hover { background: #3a3936; color: #fffaf0; }"
         ".toolbar button.flat:active, .new-tab.flat:active { background: #494741; }"
+        ".toolbar button.stop-loading { font-size: 22px; font-weight: 400; }"
         ".toolbar entry { min-height: 30px; padding: 0 12px; border-radius: 8px; border: 1px solid #45433f; background: #191918; color: #f1ede3; box-shadow: none; }"
         ".toolbar entry:focus { border-color: #ff8a62; box-shadow: 0 0 0 1px #ff8a62; }"
-        ".toolbar spinner { color: #ff8a62; margin: 0 2px; }"
+        ".browser-tab spinner { color: #ff8a62; }"
         ".load-progress trough { min-height: 2px; background: transparent; border: 0; }"
         ".load-progress progress { min-height: 2px; background: #ff7657; border: 0; }"
     );
@@ -315,7 +361,9 @@ void activate(GtkApplication *application, void *user_data) {
     gtk_widget_add_css_class(new_button, "new-tab");
     gtk_box_append(GTK_BOX(tab_strip), state->tab_box);
     gtk_box_append(GTK_BOX(tab_strip), new_button);
-    gtk_header_bar_set_title_widget(GTK_HEADER_BAR(header), tab_strip);
+    gtk_widget_set_hexpand(tab_strip, TRUE);
+    gtk_header_bar_pack_start(GTK_HEADER_BAR(header), tab_strip);
+    gtk_header_bar_set_title_widget(GTK_HEADER_BAR(header), gtk_label_new(nullptr));
     gtk_window_set_titlebar(GTK_WINDOW(state->window), header);
 
     auto *layout = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
@@ -327,12 +375,9 @@ void activate(GtkApplication *application, void *user_data) {
     state->address = gtk_entry_new();
     gtk_widget_set_hexpand(state->address, TRUE);
     gtk_entry_set_placeholder_text(GTK_ENTRY(state->address), "Search or enter address");
-    state->spinner = gtk_spinner_new();
-    gtk_widget_set_visible(state->spinner, FALSE);
     gtk_box_append(GTK_BOX(toolbar), back);
     gtk_box_append(GTK_BOX(toolbar), forward);
     gtk_box_append(GTK_BOX(toolbar), state->reload_stop);
-    gtk_box_append(GTK_BOX(toolbar), state->spinner);
     gtk_box_append(GTK_BOX(toolbar), state->address);
 
     state->progress = gtk_progress_bar_new();
@@ -362,6 +407,11 @@ void activate(GtkApplication *application, void *user_data) {
     const auto *initial = static_cast<const char *>(g_object_get_data(G_OBJECT(application), "initial-uri"));
     auto *tab = new_tab(state, initial ? initial : "vantage:new");
     gtk_window_present(GTK_WINDOW(state->window));
+    if (!initial || std::string_view(initial).starts_with("vantage:") ||
+        std::string_view(initial).starts_with("about:")) {
+        gtk_widget_grab_focus(state->address);
+        gtk_editable_select_region(GTK_EDITABLE(state->address), 0, -1);
+    }
     if (state->smoke) {
         webkit_web_view_load_html(tab->view, "<!doctype html><title>Vant smoke</title><p>ok</p>", "https://smoke.invalid/");
         g_timeout_add(900, finish_smoke, state);
