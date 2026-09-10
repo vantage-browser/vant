@@ -21,6 +21,8 @@ public:
     void update_bookmark(const std::string &old_uri, const Bookmark &bookmark);
     std::vector<Bookmark> bookmarks() const;
     bool is_bookmarked(const std::string &uri) const;
+    void set_favicon(const std::string &page_uri, const std::string &data_uri);
+    std::string favicon(const std::string &page_uri) const;
     void add_history(const std::string &uri, const std::string &title, std::int64_t visited_at);
     std::vector<HistoryEntry> history(std::size_t limit = 500) const;
     void clear_history();
