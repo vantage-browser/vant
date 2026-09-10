@@ -21,8 +21,7 @@ struct TabState {
     WebKitWebView *view{};
     GtkWidget *tab{};
     GtkWidget *body{};
-    GtkWidget *left_curve{};
-    GtkWidget *right_curve{};
+    GtkWidget *backdrop{};
     GtkWidget *label{};
     GtkWidget *icon_stack{};
     GtkWidget *favicon{};
@@ -36,6 +35,9 @@ struct WindowState {
     GtkWidget *window{};
     GtkWidget *address{};
     GtkWidget *reload_stop{};
+    GtkWidget *reload_stack{};
+    GtkWidget *reload_icon{};
+    GtkWidget *stop_icon{};
     GtkWidget *progress{};
     GtkWidget *tab_box{};
     GtkWidget *stack{};
@@ -96,10 +98,10 @@ void sync_active_chrome(WindowState *state) {
     if (!state->view) return;
     const bool loading = webkit_web_view_is_loading(state->view);
     if (loading) {
-        gtk_button_set_label(GTK_BUTTON(state->reload_stop), "×");
+        gtk_stack_set_visible_child(GTK_STACK(state->reload_stack), state->stop_icon);
         gtk_widget_add_css_class(state->reload_stop, "stop-loading");
     } else {
-        gtk_button_set_icon_name(GTK_BUTTON(state->reload_stop), "view-refresh-symbolic");
+        gtk_stack_set_visible_child(GTK_STACK(state->reload_stack), state->reload_icon);
         gtk_widget_remove_css_class(state->reload_stop, "stop-loading");
     }
     gtk_widget_set_tooltip_text(state->reload_stop, loading ? "Stop loading" : "Reload");
@@ -196,33 +198,43 @@ void select_tab(TabState *tab) {
             gtk_widget_remove_css_class(candidate->body, "active");
             gtk_widget_add_css_class(candidate->body, "inactive");
         }
-        gtk_widget_queue_draw(candidate->left_curve);
-        gtk_widget_queue_draw(candidate->right_curve);
+        gtk_widget_queue_draw(candidate->backdrop);
     }
     sync_active_chrome(state);
 }
 
 void tab_selected(GtkButton *, TabState *tab) { select_tab(tab); }
 
-void draw_tab_curve(GtkDrawingArea *area, cairo_t *cr, int width, int height, void *data) {
+void draw_tab_backdrop(GtkDrawingArea *, cairo_t *cr, int width, int height, void *data) {
     auto *tab = static_cast<TabState *>(data);
     if (tab->window->view != tab->view) return;
-    const bool left = gtk_widget_has_css_class(GTK_WIDGET(area), "left-curve");
-    cairo_set_source_rgb(cr, 0x24 / 255.0, 0x24 / 255.0, 0x23 / 255.0);
+
+    const double edge = 9.0;
+    const double top = 6.5;
+    const double radius = 8.0;
     cairo_new_path(cr);
-    if (left) {
-        cairo_move_to(cr, width, 0);
-        cairo_line_to(cr, width, height);
-        cairo_line_to(cr, 0, height);
-        cairo_curve_to(cr, width * 0.55, height, width, height * 0.5, width, 0);
-    } else {
-        cairo_move_to(cr, 0, 0);
-        cairo_line_to(cr, 0, height);
-        cairo_line_to(cr, width, height);
-        cairo_curve_to(cr, width * 0.45, height, 0, height * 0.5, 0, 0);
-    }
+    cairo_move_to(cr, 0, height);
+    cairo_curve_to(cr, edge * 0.55, height, edge, height - edge * 0.45, edge, height - edge);
+    cairo_line_to(cr, edge, top + radius);
+    cairo_curve_to(cr, edge, top + 3, edge + 3, top, edge + radius, top);
+    cairo_line_to(cr, width - edge - radius, top);
+    cairo_curve_to(cr, width - edge - 3, top, width - edge, top + 3, width - edge, top + radius);
+    cairo_line_to(cr, width - edge, height - edge);
+    cairo_curve_to(cr, width - edge, height - edge * 0.45, width - edge * 0.55, height, width, height);
+    cairo_line_to(cr, 0, height);
     cairo_close_path(cr);
-    cairo_fill_preserve(cr);
+    cairo_set_source_rgb(cr, 0x2c / 255.0, 0x2c / 255.0, 0x2c / 255.0);
+    cairo_fill(cr);
+
+    cairo_new_path(cr);
+    cairo_move_to(cr, 0.5, height - 0.5);
+    cairo_curve_to(cr, edge * 0.55, height - 0.5, edge + 0.5, height - edge * 0.45, edge + 0.5, height - edge);
+    cairo_line_to(cr, edge + 0.5, top + radius);
+    cairo_curve_to(cr, edge + 0.5, top + 3, edge + 3, top + 0.5, edge + radius, top + 0.5);
+    cairo_line_to(cr, width - edge - radius, top + 0.5);
+    cairo_curve_to(cr, width - edge - 3, top + 0.5, width - edge - 0.5, top + 3, width - edge - 0.5, top + radius);
+    cairo_line_to(cr, width - edge - 0.5, height - edge);
+    cairo_curve_to(cr, width - edge - 0.5, height - edge * 0.45, width - edge * 0.55, height - 0.5, width - 0.5, height - 0.5);
     cairo_set_source_rgb(cr, 0x39 / 255.0, 0x39 / 255.0, 0x36 / 255.0);
     cairo_set_line_width(cr, 1);
     cairo_stroke(cr);
@@ -257,9 +269,18 @@ void queue_tab_close(TabState *tab) {
 }
 void tab_closed(GtkButton *, TabState *tab) { queue_tab_close(tab); }
 
-void tab_pointer_released(GtkGestureClick *gesture, int, double, double, TabState *tab) {
-    if (gtk_gesture_single_get_current_button(GTK_GESTURE_SINGLE(gesture)) == GDK_BUTTON_MIDDLE)
-        queue_tab_close(tab);
+void header_middle_pressed(GtkGestureClick *gesture, int, double x, double y, WindowState *state) {
+    auto *header = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(gesture));
+    gtk_gesture_set_state(GTK_GESTURE(gesture), GTK_EVENT_SEQUENCE_CLAIMED);
+    for (const auto &tab : state->tabs) {
+        graphene_rect_t bounds;
+        if (!gtk_widget_compute_bounds(tab->tab, header, &bounds)) continue;
+        if (x >= bounds.origin.x && x <= bounds.origin.x + bounds.size.width &&
+            y >= bounds.origin.y && y <= bounds.origin.y + bounds.size.height) {
+            queue_tab_close(tab.get());
+            return;
+        }
+    }
 }
 void add_tab(GtkButton *, WindowState *state) { new_tab(state, "vantage:new"); }
 
@@ -268,6 +289,59 @@ GtkWidget *icon_button(const char *icon, const char *tooltip) {
     gtk_widget_add_css_class(button, "flat");
     gtk_widget_set_tooltip_text(button, tooltip);
     return button;
+}
+
+enum class ToolbarIcon { back, forward, reload };
+
+void draw_toolbar_icon(GtkDrawingArea *, cairo_t *cr, int width, int height, void *data) {
+    const auto icon = static_cast<ToolbarIcon>(GPOINTER_TO_INT(data));
+    const double cx = width / 2.0;
+    const double cy = height / 2.0;
+    cairo_set_source_rgb(cr, 0xd8 / 255.0, 0xd4 / 255.0, 0xcc / 255.0);
+    cairo_set_line_width(cr, 1.8);
+    cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+    cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
+    if (icon == ToolbarIcon::back || icon == ToolbarIcon::forward) {
+        const double direction = icon == ToolbarIcon::back ? 1.0 : -1.0;
+        const double tip = cx - direction * 5.0;
+        const double tail = cx + direction * 5.0;
+        cairo_move_to(cr, cx, cy - 5.0);
+        cairo_line_to(cr, tip, cy);
+        cairo_line_to(cr, cx, cy + 5.0);
+        cairo_move_to(cr, tip, cy);
+        cairo_line_to(cr, tail, cy);
+        cairo_stroke(cr);
+        return;
+    }
+    cairo_arc(cr, cx, cy, 6.0, -0.65, 4.65);
+    cairo_stroke(cr);
+    cairo_move_to(cr, cx - 1.0, cy - 6.1);
+    cairo_line_to(cr, cx - 5.2, cy - 6.0);
+    cairo_line_to(cr, cx - 4.2, cy - 2.0);
+    cairo_stroke(cr);
+}
+
+GtkWidget *drawn_icon(ToolbarIcon icon) {
+    auto *area = gtk_drawing_area_new();
+    gtk_widget_set_size_request(area, 20, 20);
+    gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(area), draw_toolbar_icon,
+        GINT_TO_POINTER(static_cast<int>(icon)), nullptr);
+    return area;
+}
+
+GtkWidget *drawn_icon_button(ToolbarIcon icon, const char *tooltip) {
+    auto *button = gtk_button_new();
+    gtk_widget_add_css_class(button, "flat");
+    gtk_widget_set_tooltip_text(button, tooltip);
+    gtk_button_set_child(GTK_BUTTON(button), drawn_icon(icon));
+    return button;
+}
+
+gboolean focus_address_deferred(void *data) {
+    auto *state = static_cast<WindowState *>(data);
+    gtk_editable_set_text(GTK_EDITABLE(state->address), "");
+    gtk_widget_grab_focus(state->address);
+    return G_SOURCE_REMOVE;
 }
 
 TabState *new_tab(WindowState *state, const std::string &uri) {
@@ -279,15 +353,17 @@ TabState *new_tab(WindowState *state, const std::string &uri) {
     gtk_widget_set_vexpand(tab->page, TRUE);
     gtk_stack_add_child(GTK_STACK(state->stack), tab->page);
 
-    tab->tab = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    tab->tab = gtk_overlay_new();
     gtk_widget_add_css_class(tab->tab, "browser-tab");
-    tab->left_curve = gtk_drawing_area_new();
-    gtk_widget_add_css_class(tab->left_curve, "left-curve");
-    gtk_widget_set_size_request(tab->left_curve, 9, 10);
-    gtk_widget_set_valign(tab->left_curve, GTK_ALIGN_END);
-    gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(tab->left_curve), draw_tab_curve, tab, nullptr);
+    gtk_widget_set_size_request(tab->tab, 168, 38);
+    tab->backdrop = gtk_drawing_area_new();
+    gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(tab->backdrop), draw_tab_backdrop, tab, nullptr);
+    gtk_overlay_set_child(GTK_OVERLAY(tab->tab), tab->backdrop);
     tab->body = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
     gtk_widget_add_css_class(tab->body, "browser-tab-body");
+    gtk_widget_set_margin_start(tab->body, 9);
+    gtk_widget_set_margin_end(tab->body, 9);
+    gtk_widget_set_margin_top(tab->body, 7);
     auto *hover_surface = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
     gtk_widget_add_css_class(hover_surface, "tab-hover-surface");
     auto *select = gtk_button_new();
@@ -312,22 +388,11 @@ TabState *new_tab(WindowState *state, const std::string &uri) {
     gtk_box_append(GTK_BOX(hover_surface), select);
     gtk_box_append(GTK_BOX(hover_surface), close);
     gtk_box_append(GTK_BOX(tab->body), hover_surface);
-    tab->right_curve = gtk_drawing_area_new();
-    gtk_widget_add_css_class(tab->right_curve, "right-curve");
-    gtk_widget_set_size_request(tab->right_curve, 9, 10);
-    gtk_widget_set_valign(tab->right_curve, GTK_ALIGN_END);
-    gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(tab->right_curve), draw_tab_curve, tab, nullptr);
-    gtk_box_append(GTK_BOX(tab->tab), tab->left_curve);
-    gtk_box_append(GTK_BOX(tab->tab), tab->body);
-    gtk_box_append(GTK_BOX(tab->tab), tab->right_curve);
+    gtk_overlay_add_overlay(GTK_OVERLAY(tab->tab), tab->body);
     gtk_box_append(GTK_BOX(state->tab_box), tab->tab);
 
     g_signal_connect(select, "clicked", G_CALLBACK(tab_selected), tab);
     g_signal_connect(close, "clicked", G_CALLBACK(tab_closed), tab);
-    auto *middle_click = gtk_gesture_click_new();
-    gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(middle_click), GDK_BUTTON_MIDDLE);
-    g_signal_connect(middle_click, "released", G_CALLBACK(tab_pointer_released), tab);
-    gtk_widget_add_controller(tab->tab, GTK_EVENT_CONTROLLER(middle_click));
     g_signal_connect(tab->view, "notify::uri", G_CALLBACK(uri_changed), tab);
     g_signal_connect(tab->view, "notify::title", G_CALLBACK(title_changed), tab);
     g_signal_connect(tab->view, "notify::is-loading", G_CALLBACK(loading_changed), tab);
@@ -342,6 +407,7 @@ TabState *new_tab(WindowState *state, const std::string &uri) {
     auto *data_manager = webkit_network_session_get_website_data_manager(session);
     webkit_website_data_manager_set_favicons_enabled(data_manager, TRUE);
     load_decision(tab, state->policy.resolve(uri));
+    if (uri == "vantage:new" || uri.starts_with("about:")) g_idle_add(focus_address_deferred, state);
     return tab;
 }
 
@@ -392,26 +458,24 @@ void install_style(GtkWidget *window) {
     gtk_css_provider_load_from_string(provider,
         "window { background: #171716; color: #ece8df; }"
         "headerbar { min-height: 34px; padding: 0 6px; background: #242423; box-shadow: none; border-bottom: 1px solid #393936; }"
-        ".tab-strip { margin-top: 8px; }"
+        ".tab-strip { margin-top: 2px; }"
         ".browser-tab { min-width: 150px; margin-right: 0; background: transparent; }"
-        ".browser-tab-body { margin-top: 3px; border-radius: 8px 8px 0 0; background: transparent; }"
-        ".browser-tab-body.active { margin-top: 0; background: #242423; border: 1px solid #393936; border-bottom-width: 0; }"
-        ".tab-hover-surface { margin: 2px 3px; border-radius: 7px; background: transparent; }"
+        ".browser-tab-body { background: transparent; }"
+        ".tab-hover-surface { margin: 4px 3px; border-radius: 7px; background: transparent; }"
         ".browser-tab-body.inactive .tab-hover-surface:hover { background: #353432; }"
-        ".browser-tab button { min-height: 26px; padding: 0 7px; border: 0; background: transparent; box-shadow: none; color: #d8d4cc; }"
+        ".browser-tab button { min-height: 22px; padding: 0 7px; border: 0; background: transparent; box-shadow: none; color: #d8d4cc; }"
         ".browser-tab .tab-select { min-width: 112px; }"
         ".browser-tab .tab-close { min-width: 20px; padding: 0 4px; opacity: 0; }"
         ".browser-tab:hover .tab-close, .browser-tab-body.active .tab-close { opacity: 1; }"
         ".browser-tab button:hover { background: transparent; }"
         ".browser-tab .tab-close:hover { background: transparent; color: #ff7657; }"
         ".new-tab { min-width: 28px; min-height: 28px; margin-left: 3px; }"
-        ".navigation { background: #242423; border-bottom: 1px solid #393936; }"
-        ".toolbar { padding: 6px 8px; }"
+        ".navigation { background: #2c2c2c; border-bottom: 1px solid #393936; }"
+        ".toolbar { padding: 6px 8px; background: #2c2c2c; }"
         ".toolbar button.flat, .new-tab.flat { min-width: 28px; min-height: 28px; padding: 2px; border: 0; border-radius: 7px; background: transparent; color: #d8d4cc; box-shadow: none; }"
         ".toolbar button.flat:hover, .new-tab.flat:hover { background: #3a3936; color: #fffaf0; }"
         ".toolbar button.flat:active, .new-tab.flat:active { background: #494741; }"
-        ".toolbar button.stop-loading { font-size: 26px; font-weight: 400; }"
-        ".toolbar button.history-button { font-size: 20px; font-weight: 400; }"
+        ".toolbar button.stop-loading { font-size: 27px; font-weight: 400; }"
         ".toolbar entry { min-height: 30px; padding: 0 12px; border-radius: 8px; border: 1px solid #45433f; background: #191918; color: #f1ede3; box-shadow: none; }"
         ".toolbar entry:focus { border-color: #ff8a62; box-shadow: 0 0 0 1px #ff8a62; }"
         ".browser-tab spinner { color: #ff8a62; }"
@@ -442,20 +506,29 @@ void activate(GtkApplication *application, void *user_data) {
     gtk_widget_set_hexpand(tab_strip, TRUE);
     gtk_header_bar_pack_start(GTK_HEADER_BAR(header), tab_strip);
     gtk_header_bar_set_title_widget(GTK_HEADER_BAR(header), gtk_label_new(nullptr));
+    auto *header_middle = gtk_gesture_click_new();
+    gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(header_middle), GDK_BUTTON_MIDDLE);
+    gtk_gesture_single_set_exclusive(GTK_GESTURE_SINGLE(header_middle), TRUE);
+    gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(header_middle), GTK_PHASE_CAPTURE);
+    g_signal_connect(header_middle, "pressed", G_CALLBACK(header_middle_pressed), state);
+    gtk_widget_add_controller(header, GTK_EVENT_CONTROLLER(header_middle));
     gtk_window_set_titlebar(GTK_WINDOW(state->window), header);
 
     auto *layout = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     auto *toolbar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
     gtk_widget_add_css_class(toolbar, "toolbar");
-    auto *back = gtk_button_new_with_label("←");
-    auto *forward = gtk_button_new_with_label("→");
-    for (auto *button : {back, forward}) {
-        gtk_widget_add_css_class(button, "flat");
-        gtk_widget_add_css_class(button, "history-button");
-    }
-    gtk_widget_set_tooltip_text(back, "Back");
-    gtk_widget_set_tooltip_text(forward, "Forward");
-    state->reload_stop = icon_button("view-refresh-symbolic", "Reload");
+    auto *back = drawn_icon_button(ToolbarIcon::back, "Back");
+    auto *forward = drawn_icon_button(ToolbarIcon::forward, "Forward");
+    state->reload_stop = gtk_button_new();
+    gtk_widget_add_css_class(state->reload_stop, "flat");
+    gtk_widget_set_tooltip_text(state->reload_stop, "Reload");
+    state->reload_stack = gtk_stack_new();
+    state->reload_icon = drawn_icon(ToolbarIcon::reload);
+    state->stop_icon = gtk_label_new("×");
+    gtk_stack_add_child(GTK_STACK(state->reload_stack), state->reload_icon);
+    gtk_stack_add_child(GTK_STACK(state->reload_stack), state->stop_icon);
+    gtk_stack_set_visible_child(GTK_STACK(state->reload_stack), state->reload_icon);
+    gtk_button_set_child(GTK_BUTTON(state->reload_stop), state->reload_stack);
     state->address = gtk_entry_new();
     gtk_widget_set_hexpand(state->address, TRUE);
     gtk_entry_set_placeholder_text(GTK_ENTRY(state->address), "Search or enter address");
