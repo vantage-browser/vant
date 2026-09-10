@@ -328,7 +328,7 @@ void draw_tab_backdrop(GtkDrawingArea *, cairo_t *cr, int width, int height, voi
     auto *tab = static_cast<TabState *>(data);
     if (tab->window->view != tab->view) {
         if (tab->hovered) {
-            rounded_rectangle(cr, 9, 7, width - 18, 28, 7);
+            rounded_rectangle(cr, 9, 7, width - 18, 30, 7);
             cairo_set_source_rgb(cr, 0x35 / 255.0, 0x34 / 255.0, 0x32 / 255.0);
             cairo_fill(cr);
         }
