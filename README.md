@@ -7,9 +7,10 @@ separate, capability-limited automation runtime and is never used to execute
 page JavaScript.
 
 This is a development preview, not a daily-use or security-ready release. The
-native shell currently provides an address field and Back, Forward, Reload and
-Stop controls. The independently tested tab, persistence, bookmark, permission
-and automation models are not all connected to the native interface yet.
+native shell currently provides a top tab strip, address field, Back, Forward
+and combined Reload/Stop controls with loading feedback. The independently
+tested persistence, bookmark, permission and automation models are not all
+connected to the native interface yet.
 
 ## Install development dependencies
 
