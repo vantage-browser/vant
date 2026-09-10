@@ -3,6 +3,8 @@
 #include "navigation.h"
 
 #include <gtk/gtk.h>
+#include <gdk-pixbuf/gdk-pixbuf.h>
+#include <libsoup/soup.h>
 #include <webkit/webkit.h>
 
 #include <algorithm>
@@ -111,10 +113,8 @@ void sync_active_chrome(WindowState *state) {
     const bool loading = webkit_web_view_is_loading(state->view);
     if (loading) {
         gtk_stack_set_visible_child(GTK_STACK(state->reload_stack), state->stop_icon);
-        gtk_widget_add_css_class(state->reload_stop, "stop-loading");
     } else {
         gtk_stack_set_visible_child(GTK_STACK(state->reload_stack), state->reload_icon);
-        gtk_widget_remove_css_class(state->reload_stop, "stop-loading");
     }
     gtk_widget_set_tooltip_text(state->reload_stop, loading ? "Stop loading" : "Reload");
     gtk_widget_set_opacity(state->progress, loading ? 1.0 : 0.0);
@@ -152,6 +152,78 @@ void favicon_changed(WebKitWebView *, GParamSpec *, TabState *tab) {
     if (auto *favicon = webkit_web_view_get_favicon(tab->view))
         gtk_image_set_from_paintable(GTK_IMAGE(tab->favicon), GDK_PAINTABLE(favicon));
     sync_tab_activity(tab);
+}
+
+struct FaviconRequest {
+    WindowState *state{};
+    WebKitWebView *view{};
+    SoupSession *session{};
+};
+
+void finish_favicon_request(FaviconRequest *request) {
+    if (request->session) g_object_unref(request->session);
+    g_object_unref(request->view);
+    delete request;
+}
+
+void fallback_favicon_downloaded(GObject *source, GAsyncResult *result, void *data) {
+    auto *request = static_cast<FaviconRequest *>(data);
+    GError *error = nullptr;
+    auto *bytes = soup_session_send_and_read_finish(SOUP_SESSION(source), result, &error);
+    auto *tab = find_tab(request->state, request->view);
+    if (bytes && tab) {
+        gsize size = 0;
+        const auto *contents = static_cast<const guint8 *>(g_bytes_get_data(bytes, &size));
+        auto *loader = gdk_pixbuf_loader_new();
+        if (gdk_pixbuf_loader_write(loader, contents, size, &error) &&
+            gdk_pixbuf_loader_close(loader, &error)) {
+            if (auto *pixbuf = gdk_pixbuf_loader_get_pixbuf(loader)) {
+                auto *texture = gdk_texture_new_for_pixbuf(pixbuf);
+                gtk_image_set_from_paintable(GTK_IMAGE(tab->favicon), GDK_PAINTABLE(texture));
+                g_object_unref(texture);
+                sync_tab_activity(tab);
+            }
+        }
+        g_object_unref(loader);
+        g_bytes_unref(bytes);
+    }
+    if (error) g_error_free(error);
+    finish_favicon_request(request);
+}
+
+void fallback_favicon_url_ready(GObject *source, GAsyncResult *result, void *data) {
+    auto *request = static_cast<FaviconRequest *>(data);
+    GError *error = nullptr;
+    auto *value = webkit_web_view_evaluate_javascript_finish(
+        WEBKIT_WEB_VIEW(source), result, &error);
+    if (!value || error || !find_tab(request->state, request->view)) {
+        if (value) g_object_unref(value);
+        if (error) g_error_free(error);
+        finish_favicon_request(request);
+        return;
+    }
+    auto *url = jsc_value_to_string(value);
+    g_object_unref(value);
+    const bool supported = url && (g_str_has_prefix(url, "https://") || g_str_has_prefix(url, "http://"));
+    auto *message = supported ? soup_message_new("GET", url) : nullptr;
+    g_free(url);
+    if (!message) {
+        finish_favicon_request(request);
+        return;
+    }
+    request->session = soup_session_new();
+    soup_session_send_and_read_async(request->session, message, G_PRIORITY_LOW, nullptr,
+        fallback_favicon_downloaded, request);
+    g_object_unref(message);
+}
+
+void load_changed(WebKitWebView *view, WebKitLoadEvent event, TabState *tab) {
+    if (event != WEBKIT_LOAD_FINISHED || webkit_web_view_get_favicon(view)) return;
+    auto *request = new FaviconRequest{tab->window,
+        WEBKIT_WEB_VIEW(g_object_ref(view)), nullptr};
+    constexpr auto script = "document.querySelector('link[rel~=icon]')?.href || ''";
+    webkit_web_view_evaluate_javascript(view, script, -1, nullptr, nullptr, nullptr,
+        fallback_favicon_url_ready, request);
 }
 
 void progress_changed(WebKitWebView *view, GParamSpec *, TabState *tab) {
@@ -225,17 +297,17 @@ void draw_tab_backdrop(GtkDrawingArea *, cairo_t *cr, int width, int height, voi
     const double inset = 3.0;
     const double left = inset;
     const double right = width - inset;
-    const double top = 6.0;
+    const double top = 8.0;
     const double radius = 8.0;
     cairo_new_path(cr);
     cairo_move_to(cr, left, height);
-    cairo_curve_to(cr, left + edge * 0.55, height, left + edge, height - edge * 0.45, left + edge, height - edge);
-    cairo_line_to(cr, left + edge, top + radius);
-    cairo_curve_to(cr, left + edge, top + 3, left + edge + 3, top, left + edge + radius, top);
-    cairo_line_to(cr, right - edge - radius, top);
-    cairo_curve_to(cr, right - edge - 3, top, right - edge, top + 3, right - edge, top + radius);
-    cairo_line_to(cr, right - edge, height - edge);
-    cairo_curve_to(cr, right - edge, height - edge * 0.45, right - edge * 0.55, height, right, height);
+    cairo_curve_to(cr, left + edge * 0.55, height, left, height - edge * 0.45, left, height - edge);
+    cairo_line_to(cr, left, top + radius);
+    cairo_curve_to(cr, left, top + 3, left + 3, top, left + radius, top);
+    cairo_line_to(cr, right - radius, top);
+    cairo_curve_to(cr, right - 3, top, right, top + 3, right, top + radius);
+    cairo_line_to(cr, right, height - edge);
+    cairo_curve_to(cr, right, height - edge * 0.45, right - edge * 0.55, height, right, height);
     cairo_line_to(cr, left, height);
     cairo_close_path(cr);
     cairo_set_source_rgb(cr, 0x2c / 255.0, 0x2c / 255.0, 0x2c / 255.0);
@@ -243,13 +315,13 @@ void draw_tab_backdrop(GtkDrawingArea *, cairo_t *cr, int width, int height, voi
 
     cairo_new_path(cr);
     cairo_move_to(cr, left + 0.5, height - 0.5);
-    cairo_curve_to(cr, left + edge * 0.55, height - 0.5, left + edge + 0.5, height - edge * 0.45, left + edge + 0.5, height - edge);
-    cairo_line_to(cr, left + edge + 0.5, top + radius);
-    cairo_curve_to(cr, left + edge + 0.5, top + 3, left + edge + 3, top + 0.5, left + edge + radius, top + 0.5);
-    cairo_line_to(cr, right - edge - radius, top + 0.5);
-    cairo_curve_to(cr, right - edge - 3, top + 0.5, right - edge - 0.5, top + 3, right - edge - 0.5, top + radius);
-    cairo_line_to(cr, right - edge - 0.5, height - edge);
-    cairo_curve_to(cr, right - edge - 0.5, height - edge * 0.45, right - edge * 0.55, height - 0.5, right - 0.5, height - 0.5);
+    cairo_curve_to(cr, left + edge * 0.55, height - 0.5, left + 0.5, height - edge * 0.45, left + 0.5, height - edge);
+    cairo_line_to(cr, left + 0.5, top + radius);
+    cairo_curve_to(cr, left + 0.5, top + 3, left + 3, top + 0.5, left + radius, top + 0.5);
+    cairo_line_to(cr, right - radius, top + 0.5);
+    cairo_curve_to(cr, right - 3, top + 0.5, right - 0.5, top + 3, right - 0.5, top + radius);
+    cairo_line_to(cr, right - 0.5, height - edge);
+    cairo_curve_to(cr, right - 0.5, height - edge * 0.45, right - edge * 0.55, height - 0.5, right - 0.5, height - 0.5);
     cairo_set_source_rgb(cr, 0x39 / 255.0, 0x39 / 255.0, 0x36 / 255.0);
     cairo_set_line_width(cr, 1);
     cairo_stroke(cr);
@@ -384,6 +456,8 @@ TabState *new_tab(WindowState *state, const std::string &uri) {
     gtk_widget_add_css_class(tab->tab, "browser-tab");
     gtk_widget_set_size_request(tab->tab, 184, 38);
     tab->backdrop = gtk_drawing_area_new();
+    gtk_widget_set_hexpand(tab->backdrop, TRUE);
+    gtk_widget_set_halign(tab->backdrop, GTK_ALIGN_FILL);
     gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(tab->backdrop), draw_tab_backdrop, tab, nullptr);
     gtk_overlay_set_child(GTK_OVERLAY(tab->tab), tab->backdrop);
     tab->body = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
@@ -401,6 +475,8 @@ TabState *new_tab(WindowState *state, const std::string &uri) {
     auto *tab_content = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 7);
     tab->icon_stack = gtk_stack_new();
     gtk_widget_set_size_request(tab->icon_stack, 18, 18);
+    gtk_stack_set_hhomogeneous(GTK_STACK(tab->icon_stack), TRUE);
+    gtk_stack_set_vhomogeneous(GTK_STACK(tab->icon_stack), TRUE);
     tab->favicon = gtk_image_new_from_icon_name("web-browser-symbolic");
     gtk_image_set_pixel_size(GTK_IMAGE(tab->favicon), 18);
     tab->spinner = gtk_spinner_new();
@@ -428,6 +504,7 @@ TabState *new_tab(WindowState *state, const std::string &uri) {
     g_signal_connect(tab->view, "notify::is-loading", G_CALLBACK(loading_changed), tab);
     g_signal_connect(tab->view, "notify::estimated-load-progress", G_CALLBACK(progress_changed), tab);
     g_signal_connect(tab->view, "notify::favicon", G_CALLBACK(favicon_changed), tab);
+    g_signal_connect(tab->view, "load-changed", G_CALLBACK(load_changed), tab);
     g_signal_connect(tab->view, "decide-policy", G_CALLBACK(decide_policy), tab);
     g_signal_connect(tab->view, "load-failed-with-tls-errors", G_CALLBACK(tls_failed), tab);
 
@@ -491,11 +568,11 @@ void install_style(GtkWidget *window) {
     auto *provider = gtk_css_provider_new();
     gtk_css_provider_load_from_string(provider,
         "window { background: #171716; color: #ece8df; }"
-        "headerbar { min-height: 34px; padding: 0 6px; background: #242423; box-shadow: none; border: 0; border-bottom: 1px solid #393936; }"
+        "headerbar { min-height: 34px; padding: 0 6px; background: #242423; box-shadow: inset 0 -1px #393936; border: 0; }"
         ".tab-strip { margin-top: 2px; }"
         ".browser-tab { min-width: 184px; margin-right: 0; background: transparent; }"
         ".browser-tab-body { background: transparent; }"
-        ".tab-hover-surface { min-height: 26px; margin: 1px 3px; border-radius: 7px; background: transparent; }"
+        ".tab-hover-surface { min-height: 24px; margin: 3px 3px 1px; border-radius: 7px; background: transparent; }"
         ".browser-tab-body.inactive .tab-hover-surface:hover { background: #353432; }"
         ".browser-tab button { min-height: 22px; padding: 0 7px; border: 0; background: transparent; box-shadow: none; color: #d8d4cc; }"
         ".browser-tab .tab-select { min-width: 112px; }"
@@ -509,7 +586,7 @@ void install_style(GtkWidget *window) {
         ".toolbar button.flat, .new-tab.flat { min-width: 28px; min-height: 28px; padding: 2px; border: 0; border-radius: 7px; background: transparent; color: #d8d4cc; box-shadow: none; }"
         ".toolbar button.flat:hover, .new-tab.flat:hover { background: #3a3936; color: #fffaf0; }"
         ".toolbar button.flat:active, .new-tab.flat:active { background: #494741; }"
-        ".toolbar button.stop-loading { font-size: 27px; font-weight: 400; }"
+        ".toolbar .stop-icon { font-size: 27px; font-weight: 400; }"
         ".toolbar entry { min-height: 30px; padding: 0 12px; border-radius: 8px; border: 1px solid #45433f; background: #191918; color: #f1ede3; box-shadow: none; }"
         ".toolbar entry:focus { border-color: #ff8a62; box-shadow: 0 0 0 1px #ff8a62; }"
         ".browser-tab spinner { color: #ff8a62; }"
@@ -567,8 +644,12 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     gtk_widget_add_css_class(state->reload_stop, "flat");
     gtk_widget_set_tooltip_text(state->reload_stop, "Reload");
     state->reload_stack = gtk_stack_new();
+    gtk_widget_set_size_request(state->reload_stack, 20, 20);
+    gtk_stack_set_hhomogeneous(GTK_STACK(state->reload_stack), TRUE);
+    gtk_stack_set_vhomogeneous(GTK_STACK(state->reload_stack), TRUE);
     state->reload_icon = drawn_icon(ToolbarIcon::reload);
     state->stop_icon = gtk_label_new("×");
+    gtk_widget_add_css_class(state->stop_icon, "stop-icon");
     gtk_stack_add_child(GTK_STACK(state->reload_stack), state->reload_icon);
     gtk_stack_add_child(GTK_STACK(state->reload_stack), state->stop_icon);
     gtk_stack_set_visible_child(GTK_STACK(state->reload_stack), state->reload_icon);
