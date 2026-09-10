@@ -14,6 +14,7 @@
 namespace {
 
 struct WindowState;
+struct ApplicationState;
 
 struct TabState {
     WindowState *window{};
@@ -31,6 +32,7 @@ struct TabState {
 };
 
 struct WindowState {
+    ApplicationState *owner{};
     GtkApplication *application{};
     GtkWidget *window{};
     GtkWidget *address{};
@@ -47,8 +49,16 @@ struct WindowState {
     bool smoke{};
 };
 
+struct ApplicationState {
+    GtkApplication *application{};
+    std::string initial_uri;
+    bool smoke{};
+    std::vector<std::unique_ptr<WindowState>> windows;
+};
+
 void sync_active_chrome(WindowState *state);
 TabState *new_tab(WindowState *state, const std::string &uri);
+void create_window(ApplicationState *owner, const std::string &initial_uri, bool smoke);
 
 TabState *find_tab(WindowState *state, WebKitWebView *view) {
     const auto found = std::find_if(state->tabs.begin(), state->tabs.end(),
@@ -105,7 +115,7 @@ void sync_active_chrome(WindowState *state) {
         gtk_widget_remove_css_class(state->reload_stop, "stop-loading");
     }
     gtk_widget_set_tooltip_text(state->reload_stop, loading ? "Stop loading" : "Reload");
-    gtk_widget_set_visible(state->progress, loading);
+    gtk_widget_set_opacity(state->progress, loading ? 1.0 : 0.0);
     gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(state->progress),
         webkit_web_view_get_estimated_load_progress(state->view));
 
@@ -361,13 +371,16 @@ TabState *new_tab(WindowState *state, const std::string &uri) {
     gtk_overlay_set_child(GTK_OVERLAY(tab->tab), tab->backdrop);
     tab->body = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
     gtk_widget_add_css_class(tab->body, "browser-tab-body");
-    gtk_widget_set_margin_start(tab->body, 9);
-    gtk_widget_set_margin_end(tab->body, 9);
-    gtk_widget_set_margin_top(tab->body, 7);
+    gtk_widget_set_halign(tab->body, GTK_ALIGN_FILL);
+    gtk_widget_set_valign(tab->body, GTK_ALIGN_CENTER);
+    gtk_widget_set_hexpand(tab->body, TRUE);
+    gtk_widget_set_size_request(tab->body, -1, 28);
     auto *hover_surface = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
     gtk_widget_add_css_class(hover_surface, "tab-hover-surface");
+    gtk_widget_set_hexpand(hover_surface, TRUE);
     auto *select = gtk_button_new();
     gtk_widget_add_css_class(select, "tab-select");
+    gtk_widget_set_hexpand(select, TRUE);
     auto *tab_content = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 7);
     tab->icon_stack = gtk_stack_new();
     gtk_widget_set_size_request(tab->icon_stack, 18, 18);
@@ -430,6 +443,10 @@ gboolean key_pressed(GtkEventControllerKey *, guint keyval, guint,
         new_tab(state, "vantage:new");
         return TRUE;
     }
+    if (control && (keyval == GDK_KEY_n || keyval == GDK_KEY_N)) {
+        create_window(state->owner, "vantage:new", false);
+        return TRUE;
+    }
     if (control && (keyval == GDK_KEY_w || keyval == GDK_KEY_W)) {
         if (auto *tab = find_tab(state, state->view)) close_tab(tab);
         return TRUE;
@@ -457,11 +474,11 @@ void install_style(GtkWidget *window) {
     auto *provider = gtk_css_provider_new();
     gtk_css_provider_load_from_string(provider,
         "window { background: #171716; color: #ece8df; }"
-        "headerbar { min-height: 34px; padding: 0 6px; background: #242423; box-shadow: none; border-bottom: 1px solid #393936; }"
+        "headerbar { min-height: 34px; padding: 0 6px; background: #242423; box-shadow: none; border: 0; }"
         ".tab-strip { margin-top: 2px; }"
         ".browser-tab { min-width: 150px; margin-right: 0; background: transparent; }"
         ".browser-tab-body { background: transparent; }"
-        ".tab-hover-surface { margin: 4px 3px; border-radius: 7px; background: transparent; }"
+        ".tab-hover-surface { min-height: 26px; margin: 1px 0; border-radius: 7px; background: transparent; }"
         ".browser-tab-body.inactive .tab-hover-surface:hover { background: #353432; }"
         ".browser-tab button { min-height: 22px; padding: 0 7px; border: 0; background: transparent; box-shadow: none; color: #d8d4cc; }"
         ".browser-tab .tab-select { min-width: 112px; }"
@@ -487,10 +504,15 @@ void install_style(GtkWidget *window) {
     g_object_unref(provider);
 }
 
-void activate(GtkApplication *application, void *user_data) {
-    auto *state = static_cast<WindowState *>(user_data);
-    state->application = application;
-    state->window = gtk_application_window_new(application);
+void create_window(ApplicationState *owner, const std::string &initial_uri, bool smoke) {
+    auto owned_state = std::make_unique<WindowState>();
+    auto *state = owned_state.get();
+    state->owner = owner;
+    state->application = owner->application;
+    state->smoke = smoke;
+    owner->windows.push_back(std::move(owned_state));
+
+    state->window = gtk_application_window_new(owner->application);
     gtk_window_set_title(GTK_WINDOW(state->window), "Vantage Browser");
     gtk_window_set_default_size(GTK_WINDOW(state->window), 1100, 760);
 
@@ -539,7 +561,7 @@ void activate(GtkApplication *application, void *user_data) {
 
     state->progress = gtk_progress_bar_new();
     gtk_widget_add_css_class(state->progress, "load-progress");
-    gtk_widget_set_visible(state->progress, FALSE);
+    gtk_widget_set_opacity(state->progress, 0.0);
     auto *navigation = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     gtk_widget_add_css_class(navigation, "navigation");
     gtk_box_append(GTK_BOX(navigation), toolbar);
@@ -561,17 +583,22 @@ void activate(GtkApplication *application, void *user_data) {
     g_signal_connect(keys, "key-pressed", G_CALLBACK(key_pressed), state);
     gtk_widget_add_controller(state->window, keys);
 
-    const auto *initial = static_cast<const char *>(g_object_get_data(G_OBJECT(application), "initial-uri"));
-    auto *tab = new_tab(state, initial ? initial : "vantage:new");
+    auto *tab = new_tab(state, initial_uri);
     gtk_window_present(GTK_WINDOW(state->window));
-    if (!initial || std::string_view(initial).starts_with("vantage:") ||
-        std::string_view(initial).starts_with("about:")) {
+    if (initial_uri.starts_with("vantage:") || initial_uri.starts_with("about:")) {
         gtk_widget_grab_focus(state->address);
     }
     if (state->smoke) {
         webkit_web_view_load_html(tab->view, "<!doctype html><title>Vant smoke</title><p>ok</p>", "https://smoke.invalid/");
         g_timeout_add(900, finish_smoke, state);
     }
+}
+
+void activate(GtkApplication *application, void *user_data) {
+    auto *owner = static_cast<ApplicationState *>(user_data);
+    owner->application = application;
+    create_window(owner, owner->initial_uri, owner->smoke);
+    owner->smoke = false;
 }
 
 } // namespace
@@ -588,9 +615,10 @@ std::string native_versions() {
 int run_native(bool smoke, const std::string &initial_uri) {
     auto application = std::unique_ptr<GtkApplication, decltype(&g_object_unref)>(
         gtk_application_new("cv.vantage_browser.Vantage", G_APPLICATION_DEFAULT_FLAGS), &g_object_unref);
-    WindowState state;
+    ApplicationState state;
+    state.application = application.get();
+    state.initial_uri = initial_uri;
     state.smoke = smoke;
-    g_object_set_data_full(G_OBJECT(application.get()), "initial-uri", g_strdup(initial_uri.c_str()), g_free);
     g_signal_connect(application.get(), "activate", G_CALLBACK(activate), &state);
     return g_application_run(G_APPLICATION(application.get()), 0, nullptr);
 }
