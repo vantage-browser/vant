@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "checkpoint": "V3",
+  "status": "accepted-core",
+  "sqlite": "3.45.1",
+  "verified": ["schema creation", "transactional tab replacement", "unclean-exit marker", "restore ordering", "corrupt database rejection", "private in-memory store", "ASan/UBSan"],
+  "pending": ["native UI restore binding", "future schema migration fixtures", "crashing-page quarantine on WebKit process termination"]
+}
