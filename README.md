@@ -8,9 +8,11 @@ page JavaScript.
 
 This is a development preview, not a daily-use or security-ready release. The
 native shell currently provides tabs, navigation controls, persistent bookmarks,
-history and downloads, private windows, printing, zoom controls and familiar
-Chromium-style keyboard shortcuts. Permission and automation models are not all
-connected to the native interface yet.
+searchable history and downloads, private windows, printing, zoom controls and
+familiar Chromium-style keyboard shortcuts. Bookmarks can be added, edited and
+bulk-removed; history supports bulk removal; downloads expose live byte progress,
+recent activity, link copying and file-manager actions. Permission and automation
+models are not all connected to the native interface yet.
 
 ## Install development dependencies
 

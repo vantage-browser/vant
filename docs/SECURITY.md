@@ -5,6 +5,13 @@ processes. The application chrome must not register a general page-to-native
 message bridge. Internal `vantage:` resources are produced from fixed application
 data and must never interpolate unescaped page-controlled content.
 
+History, bookmark and download management actions use narrowly scoped internal
+`vantage:` navigation targets. They are accepted only while the initiating tab
+is already displaying trusted internal content; ordinary web pages cannot call
+them. All stored titles, paths and URLs are escaped before entering internal
+HTML. Favicons are cached while their page is visited so opening a management
+page does not reconnect to every origin represented in the list.
+
 Navigation policy accepts HTTP(S), fixed internal schemes and explicitly handed
 off external protocols. `file:`, `javascript:`, `data:` and unknown schemes are
 rejected at the application boundary. TLS errors fail closed in the first

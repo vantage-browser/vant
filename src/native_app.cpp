@@ -67,6 +67,7 @@ struct WindowState {
     vantage::NavigationPolicy policy;
     bool smoke{};
     bool private_mode{};
+    bool closed{};
     bool new_tab_hovered{};
     double progress_fraction{};
     ~WindowState() { if (private_session) g_object_unref(private_session); }
@@ -485,7 +486,10 @@ gboolean decide_policy(WebKitWebView *, WebKitPolicyDecision *decision,
         }
     }
     const auto resolved = tab->window->policy.resolve(uri ? uri : "");
-    if (resolved.kind == vantage::NavigationKind::web) return FALSE;
+    if (resolved.kind == vantage::NavigationKind::web) {
+        tab->internal_uri.clear();
+        return FALSE;
+    }
     webkit_policy_decision_ignore(decision);
     if (resolved.kind == vantage::NavigationKind::internal) load_decision(tab, resolved);
     return TRUE;
@@ -879,12 +883,18 @@ void downloads_visibility_changed(GtkWidget *popover, GParamSpec *, WindowState 
 void refresh_download_chrome(ApplicationState *owner) {
     const bool active = !owner->active_downloads.empty();
     for (const auto &window : owner->windows) {
+        if (window->closed) continue;
         gtk_stack_set_visible_child(GTK_STACK(window->downloads_stack),
             active ? window->downloads_spinner : window->downloads_icon);
         if (active) gtk_spinner_start(GTK_SPINNER(window->downloads_spinner));
         else gtk_spinner_stop(GTK_SPINNER(window->downloads_spinner));
         if (gtk_widget_get_visible(window->downloads_popover)) rebuild_download_popover(window.get());
     }
+}
+
+gboolean window_closing(GtkWindow *, WindowState *state) {
+    state->closed = true;
+    return FALSE;
 }
 
 gboolean download_destination(WebKitDownload *download, const char *suggested, DownloadContext *context) {
@@ -1219,6 +1229,7 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     owner->windows.push_back(std::move(owned_state));
 
     state->window = gtk_application_window_new(owner->application);
+    g_signal_connect(state->window, "close-request", G_CALLBACK(window_closing), state);
     gtk_window_set_title(GTK_WINDOW(state->window), private_mode ? "Vantage Private" : "Vantage Browser");
     const int source_width = source ? gtk_widget_get_width(source->window) : 0;
     const int source_height = source ? gtk_widget_get_height(source->window) : 0;
