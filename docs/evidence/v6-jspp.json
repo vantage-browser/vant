@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "checkpoint": "V6",
+  "status": "accepted",
+  "jspp": {"version": "0.0.0-dev", "commit": "8fbad86a49123d973e5f61fbaf09fe5e92abd991", "api": "0.1"},
+  "verified": ["allowlisted deterministic snapshot", "per-file SHA-256 manifest", "licence retained", "private symbol visibility", "Vantage-owned adapter", "250 runtime create/evaluate/destroy cycles", "instruction/stack/allocation limits", "ASan/UBSan"],
+  "boundary": "JS++ is not connected to WebKit page execution"
+}

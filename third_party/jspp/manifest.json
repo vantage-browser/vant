@@ -1,0 +1,27 @@
+{
+  "commit": "8fbad86a49123d973e5f61fbaf09fe5e92abd991",
+  "files": {
+    "LICENSE": "c5e75e81fb1ef639651320e317825610d0452bf528bdb5650fa05794cf0d162b",
+    "include/js.h": "87ccaf13e961bf4fc27627f2a2e8f39be758f8ace5ebd19bf54f11238ee1f9f7",
+    "src/Bytecode.cpp": "2ee42986259ad8f5ae8b9df19987608827b70d26f90dd0a4078a24356522701c",
+    "src/Bytecode.h": "11706880ebb950eb03617e870df5c3b7d0a8dc47f9b95ac404227bf7a1e6ebcd",
+    "src/Conversion.cpp": "2c888d1d3e84322be2ac171378290fc4fe8c3a9f6c3fc8685b29d71f36c3a07f",
+    "src/Conversion.h": "963fa01b41e4e8c783fed66b4e57f776283fc8c34bde78be30bd952a2347c38e",
+    "src/Error.h": "b72262b321785ad36a6f18d3b4f4ab3a07f04c3c6b154eb60142cb4e3af7cd46",
+    "src/Frontend.cpp": "717f258ad60f7c5fa3aa01ea1efc6de7a454153cd735c4f5e88b31630a429b5c",
+    "src/Frontend.h": "725ecfb479cebb21c7576ba8b89854a88495f3072305a0b86ca7785ee86b797d",
+    "src/Heap.cpp": "8857b9066c442e380ee1db216e2e6f5438be20425bba26bd85aaccd53deccf11",
+    "src/Intrinsics.cpp": "0c37547fa98864e96f67ce1fcdc28cefffebebb5d07910d5383a42c768076050",
+    "src/Intrinsics.h": "8e11e6eb90a67d3f993958a63b105e33fd5b738797d670add343189c78c34c5b",
+    "src/Property.h": "75bfa4beb0d7f0baa69c75af1c62eb84fdcacad81945c8b7df11d529c159e8b2",
+    "src/Runtime.cpp": "f1a396fe5198130a0cbd624e7f3a0d52b7ffdc3555e989afcd93d2aee300feb5",
+    "src/Runtime.h": "d364bda813a168801d47030396b882346102594f50b3f8833031219feccfaa59",
+    "src/VM.cpp": "9eb08c702daf9c6d5c243e0d658d6e0a3abe69174fb68dff0b0a77f645313059",
+    "src/VM.h": "9c70c6f97aa2cecb8531b941f7804cd8e5122fc74364940ebd532e5e354b530b",
+    "src/Version.h": "cde56a548791c1a543ed55b0b5af3db30b31a3181a550254fc48be95193a0571"
+  },
+  "product": "JS++",
+  "repository": "https://github.com/gantry-tools/js.git",
+  "schema_version": 1,
+  "version": "0.0.0-dev"
+}

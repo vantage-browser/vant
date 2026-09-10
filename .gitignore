@@ -2,3 +2,4 @@
 /benchmark-results/
 *.tmp
 *.log
+!/third_party/jspp/manifest.json

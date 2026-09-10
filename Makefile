@@ -8,6 +8,9 @@ SQLITE_LIBS := $(shell pkg-config --libs sqlite3)
 BUILD := build
 CORE_SOURCES := src/application.cpp src/navigation.cpp src/browser_model.cpp src/session_store.cpp src/user_data.cpp
 CORE_OBJECTS := $(CORE_SOURCES:src/%.cpp=$(BUILD)/%.o)
+JSPP_DIR := third_party/jspp
+JSPP_SOURCES := $(filter-out $(JSPP_DIR)/src/main.cpp,$(wildcard $(JSPP_DIR)/src/*.cpp))
+JSPP_OBJECTS := $(JSPP_SOURCES:$(JSPP_DIR)/src/%.cpp=$(BUILD)/jspp/%.o)
 
 .PHONY: all test test-unit test-sanitize smoke smoke-native benchmark evidence clean
 all: $(BUILD)/vant
@@ -21,7 +24,16 @@ $(BUILD)/%.o: src/%.cpp | $(BUILD)
 $(BUILD)/native_app.o: src/native_app.cpp src/native_app.h | $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(NATIVE_CFLAGS) -c $< -o $@
 
-$(BUILD)/vant: src/main.cpp $(CORE_OBJECTS) $(BUILD)/native_app.o
+$(BUILD)/jspp:
+	mkdir -p $(BUILD)/jspp
+
+$(BUILD)/jspp/%.o: $(JSPP_DIR)/src/%.cpp | $(BUILD)/jspp
+	$(CXX) -I$(JSPP_DIR)/src -I$(JSPP_DIR)/include $(CXXFLAGS) -fvisibility=hidden -c $< -o $@
+
+$(BUILD)/jspp_adapter.o: src/jspp_adapter.cpp src/jspp_adapter.h | $(BUILD)
+	$(CXX) $(CPPFLAGS) -I$(JSPP_DIR)/include $(CXXFLAGS) -c $< -o $@
+
+$(BUILD)/vant: src/main.cpp $(CORE_OBJECTS) $(BUILD)/native_app.o $(BUILD)/jspp_adapter.o $(JSPP_OBJECTS)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(NATIVE_CFLAGS) $(SQLITE_CFLAGS) $^ $(NATIVE_LIBS) $(SQLITE_LIBS) -o $@
 
 $(BUILD)/test_application: tests/application.cpp $(CORE_OBJECTS)
@@ -39,12 +51,16 @@ $(BUILD)/test_session_store: tests/session_store.cpp $(CORE_OBJECTS)
 $(BUILD)/test_user_data: tests/user_data.cpp $(CORE_OBJECTS)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(SQLITE_CFLAGS) $^ $(SQLITE_LIBS) -o $@
 
-test-unit: $(BUILD)/test_application $(BUILD)/test_navigation $(BUILD)/test_browser_model $(BUILD)/test_session_store $(BUILD)/test_user_data
+$(BUILD)/test_jspp_adapter: tests/jspp_adapter.cpp $(BUILD)/jspp_adapter.o $(JSPP_OBJECTS)
+	$(CXX) $(CPPFLAGS) -I$(JSPP_DIR)/include $(CXXFLAGS) $^ -pthread -o $@
+
+test-unit: $(BUILD)/test_application $(BUILD)/test_navigation $(BUILD)/test_browser_model $(BUILD)/test_session_store $(BUILD)/test_user_data $(BUILD)/test_jspp_adapter
 	./$(BUILD)/test_application
 	./$(BUILD)/test_navigation
 	./$(BUILD)/test_browser_model
 	./$(BUILD)/test_session_store
 	./$(BUILD)/test_user_data
+	./$(BUILD)/test_jspp_adapter
 
 smoke: $(BUILD)/vant
 	./$(BUILD)/vant --headless-smoke
@@ -67,6 +83,11 @@ test-sanitize:
 	ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 ./$(BUILD)/san/test_browser_model
 	ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 ./$(BUILD)/san/test_session_store
 	ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 ./$(BUILD)/san/test_user_data
+	$(CXX) $(CPPFLAGS) -I$(JSPP_DIR)/include -I$(JSPP_DIR)/src -std=c++20 -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -Wall -Wextra -Wpedantic -Werror tests/jspp_adapter.cpp src/jspp_adapter.cpp $(JSPP_SOURCES) -pthread -o $(BUILD)/san/test_jspp_adapter
+	ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 ./$(BUILD)/san/test_jspp_adapter
+
+vendor-check:
+	python3 tools/vendor_jspp.py --check
 
 evidence: all
 	python3 tools/record_environment.py --output $(BUILD)/environment.json
