@@ -98,6 +98,34 @@ gboolean finish_smoke(void *data) {
     return G_SOURCE_REMOVE;
 }
 
+gboolean key_pressed(GtkEventControllerKey *, guint keyval, guint,
+                     GdkModifierType modifiers, WindowState *state) {
+    const bool control = (modifiers & GDK_CONTROL_MASK) != 0;
+    const bool alternate = (modifiers & GDK_ALT_MASK) != 0;
+    if (control && (keyval == GDK_KEY_l || keyval == GDK_KEY_L)) {
+        gtk_widget_grab_focus(state->address);
+        gtk_editable_select_region(GTK_EDITABLE(state->address), 0, -1);
+        return TRUE;
+    }
+    if ((control && (keyval == GDK_KEY_r || keyval == GDK_KEY_R)) || keyval == GDK_KEY_F5) {
+        webkit_web_view_reload(state->view);
+        return TRUE;
+    }
+    if (alternate && keyval == GDK_KEY_Left) {
+        go_back(nullptr, state);
+        return TRUE;
+    }
+    if (alternate && keyval == GDK_KEY_Right) {
+        go_forward(nullptr, state);
+        return TRUE;
+    }
+    if (keyval == GDK_KEY_Escape && webkit_web_view_is_loading(state->view)) {
+        webkit_web_view_stop_loading(state->view);
+        return TRUE;
+    }
+    return FALSE;
+}
+
 GtkWidget *icon_button(const char *icon, const char *tooltip) {
     auto *button = gtk_button_new_from_icon_name(icon);
     gtk_widget_add_css_class(button, "flat");
@@ -154,6 +182,10 @@ void activate(GtkApplication *application, void *user_data) {
     g_signal_connect(state->view, "notify::estimated-load-progress", G_CALLBACK(progress_changed), state);
     g_signal_connect(state->view, "decide-policy", G_CALLBACK(decide_policy), state);
     g_signal_connect(state->view, "load-failed-with-tls-errors", G_CALLBACK(tls_failed), state);
+
+    auto *keys = gtk_event_controller_key_new();
+    g_signal_connect(keys, "key-pressed", G_CALLBACK(key_pressed), state);
+    gtk_widget_add_controller(state->window, keys);
 
     gtk_window_present(GTK_WINDOW(state->window));
     if (state->smoke) {

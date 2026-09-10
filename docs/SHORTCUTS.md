@@ -11,5 +11,8 @@
 | `Escape` | Stop loading or close transient chrome |
 | `Ctrl+F` | Find in page |
 
-These are the model-level defaults. Native GTK accelerators, focus traversal and
-screen-reader verification remain part of the target-platform acceptance pass.
+`Ctrl+L`, `Ctrl+R`, `F5`, `Alt+Left`, `Alt+Right` and `Escape` are connected to
+the native GTK shell. The remaining model-level defaults will be connected as
+their corresponding native tab, palette and find surfaces land. Focus traversal
+and screen-reader verification remain part of the target-platform acceptance
+pass.
