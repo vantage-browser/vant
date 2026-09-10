@@ -328,7 +328,7 @@ void draw_tab_backdrop(GtkDrawingArea *, cairo_t *cr, int width, int height, voi
     auto *tab = static_cast<TabState *>(data);
     if (tab->window->view != tab->view) {
         if (tab->hovered) {
-            rounded_rectangle(cr, 9, 7, width - 18, 24, 7);
+            rounded_rectangle(cr, 9, 7, width - 18, 28, 7);
             cairo_set_source_rgb(cr, 0x35 / 255.0, 0x34 / 255.0, 0x32 / 255.0);
             cairo_fill(cr);
         }
@@ -709,6 +709,9 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     gtk_overlay_set_child(GTK_OVERLAY(new_tab_content), state->new_tab_backdrop);
     auto *new_tab_icon = gtk_image_new_from_icon_name("list-add-symbolic");
     gtk_widget_set_can_target(new_tab_icon, FALSE);
+    gtk_widget_set_halign(new_tab_icon, GTK_ALIGN_CENTER);
+    gtk_widget_set_valign(new_tab_icon, GTK_ALIGN_CENTER);
+    gtk_widget_set_margin_top(new_tab_icon, 2);
     gtk_overlay_add_overlay(GTK_OVERLAY(new_tab_content), new_tab_icon);
     gtk_button_set_child(GTK_BUTTON(new_button), new_tab_content);
     auto *new_tab_motion = gtk_event_controller_motion_new();
