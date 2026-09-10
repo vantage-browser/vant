@@ -68,6 +68,7 @@ struct WindowState {
     GtkWidget *downloads_icon{};
     GtkWidget *downloads_spinner{};
     GtkWidget *tab_box{};
+    GtkWidget *tab_scroller{};
     GtkWidget *stack{};
     GtkWidget *new_tab_backdrop{};
     WebKitWebView *view{};
@@ -412,12 +413,11 @@ void source_loaded(GObject *source, GAsyncResult *result, void *data) {
     if (bytes && tab) {
         auto *encoded = g_base64_encode(bytes, size);
         const auto base = javascript_string(request->uri);
-        const std::string page = "<!doctype html><html><head><meta charset=utf-8><title>Source</title><style>"
+        const std::string page = std::string("<!doctype html><html><head><meta charset=utf-8><title>Source</title><style>") +
             "html{color-scheme:dark}body{margin:0;background:#191918;color:#ddd8ce;font:13px/1.55 'JetBrains Mono','DejaVu Sans Mono',monospace}"
-            "header{position:sticky;top:0;padding:12px 18px;background:#252423;border-bottom:1px solid #403e3a;color:#ffb07c}"
             "pre{margin:0;padding:18px;white-space:pre-wrap;overflow-wrap:anywhere}.comment{color:#85827b}.tag{color:#ff8a62}"
-            ".attr{color:#ffd37a}.string,a{color:#9fd7ff}a:hover{color:#ff8a62}</style></head><body><header>Source: " +
-            html_escape(request->uri) + "</header><pre id=s></pre><script>const raw=new TextDecoder().decode(Uint8Array.from(atob('" + encoded + "'),c=>c.charCodeAt(0))),base=" + base + ";"
+            ".attr{color:#ffd37a}.string,a{color:#9fd7ff}a:hover{color:#ff8a62}</style></head><body><pre id=s></pre>"
+            "<script>const raw=new TextDecoder().decode(Uint8Array.from(atob('" + encoded + "'),c=>c.charCodeAt(0))),base=" + base + ";"
             "const esc=s=>s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));"
             "function tag(t){let out='',p=0,re=/([\\w:-]+)(\\s*=\\s*)([\"'])(.*?)\\3/g,m;while((m=re.exec(t))){out+=esc(t.slice(p,m.index));"
             "let n='<span class=\"attr\">'+esc(m[1])+'</span>'+esc(m[2]),v=esc(m[4]);"
@@ -453,7 +453,7 @@ void page_action(GSimpleAction *, GVariant *, void *data) {
         if (!resource || !uri) return;
         auto *target = new_tab(action->tab->window, "vantage:new", false);
         target->internal_uri = "vantage:source";
-        target->display_uri = "view-source:" + std::string(uri);
+        target->display_uri = "source:" + std::string(uri);
         webkit_web_view_load_html(target->view,
             "<!doctype html><html><head><meta charset=utf-8><title>Source</title><style>html{color-scheme:dark}"
             "body{margin:0;min-height:100vh;display:grid;place-items:center;background:#191918;color:#aaa59c;"
@@ -1087,6 +1087,27 @@ gboolean load_failed(WebKitWebView *view, WebKitLoadEvent, const char *failing_u
     return TRUE;
 }
 
+struct RevealTabData { WindowState *state{}; WebKitWebView *view{}; };
+
+gboolean reveal_tab_deferred(void *data) {
+    std::unique_ptr<RevealTabData> reveal(static_cast<RevealTabData *>(data));
+    auto *tab = !reveal->state->closed ? find_tab(reveal->state, reveal->view) : nullptr;
+    if (tab && reveal->state->tab_scroller) {
+        graphene_rect_t bounds;
+        if (gtk_widget_compute_bounds(tab->tab, reveal->state->tab_box, &bounds)) {
+            auto *adjustment = gtk_scrolled_window_get_hadjustment(GTK_SCROLLED_WINDOW(reveal->state->tab_scroller));
+            const double current = gtk_adjustment_get_value(adjustment);
+            const double page = gtk_adjustment_get_page_size(adjustment);
+            const double left = bounds.origin.x;
+            const double right = left + bounds.size.width;
+            if (left < current) gtk_adjustment_set_value(adjustment, left);
+            else if (right > current + page) gtk_adjustment_set_value(adjustment, right - page);
+        }
+    }
+    g_object_unref(reveal->view);
+    return G_SOURCE_REMOVE;
+}
+
 void select_tab(TabState *tab) {
     auto *state = tab->window;
     state->view = tab->view;
@@ -1102,7 +1123,21 @@ void select_tab(TabState *tab) {
         gtk_widget_queue_draw(candidate->backdrop);
     }
     sync_active_chrome(state);
+    g_idle_add(reveal_tab_deferred, new RevealTabData{state,
+        WEBKIT_WEB_VIEW(g_object_ref(tab->view))});
     if (gtk_widget_get_visible(state->find_bar)) find_changed(GTK_EDITABLE(state->find_entry), state);
+}
+
+gboolean tab_strip_scrolled(GtkEventControllerScroll *, double, double dy, WindowState *state) {
+    if (state->tabs.size() < 2 || std::abs(dy) < 0.01) return FALSE;
+    const auto found = std::find_if(state->tabs.begin(), state->tabs.end(),
+        [state](const auto &tab) { return tab->view == state->view; });
+    if (found == state->tabs.end()) return FALSE;
+    auto index = static_cast<std::size_t>(std::distance(state->tabs.begin(), found));
+    if (dy > 0) index = (index + 1) % state->tabs.size();
+    else index = (index + state->tabs.size() - 1) % state->tabs.size();
+    select_tab(state->tabs[index].get());
+    return TRUE;
 }
 
 void tab_selected(GtkButton *, TabState *tab) { select_tab(tab); }
@@ -1416,11 +1451,31 @@ gboolean suggestion_key_pressed(GtkEventControllerKey *, guint key, guint, GdkMo
     return FALSE;
 }
 
-gboolean address_key_pressed(GtkEventControllerKey *, guint key, guint, GdkModifierType,
+gboolean address_key_pressed(GtkEventControllerKey *, guint key, guint, GdkModifierType modifiers,
                              WindowState *state) {
+    if (key == GDK_KEY_Tab) {
+        gtk_widget_grab_focus((modifiers & GDK_SHIFT_MASK) != 0 ? state->reload_stop : state->bookmark_button);
+        return TRUE;
+    }
     if (key != GDK_KEY_Down || !gtk_widget_get_visible(state->address_popover)) return FALSE;
     if (auto *first = gtk_widget_get_first_child(state->address_suggestions)) {
         gtk_widget_grab_focus(first);
+        return TRUE;
+    }
+    return FALSE;
+}
+
+gboolean toolbar_focus_key(GtkEventControllerKey *controller, guint key, guint,
+                           GdkModifierType modifiers, WindowState *state) {
+    if (key != GDK_KEY_Tab) return FALSE;
+    auto *widget = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(controller));
+    const bool reverse = (modifiers & GDK_SHIFT_MASK) != 0;
+    if (widget == state->reload_stop && !reverse) {
+        gtk_widget_grab_focus(state->address);
+        return TRUE;
+    }
+    if (widget == state->bookmark_button && reverse) {
+        gtk_widget_grab_focus(state->address);
         return TRUE;
     }
     return FALSE;
@@ -1465,6 +1520,10 @@ void address_changed(GtkEditable *editable, WindowState *state) {
         if (++shown == 8) break;
     }
     if (shown) {
+        const int width = gtk_widget_get_width(state->address);
+        gtk_widget_set_size_request(state->address_popover, std::max(width, 320), -1);
+        const GdkRectangle anchor{0, 0, std::max(width, 1), std::max(gtk_widget_get_height(state->address), 1)};
+        gtk_popover_set_pointing_to(GTK_POPOVER(state->address_popover), &anchor);
         gtk_popover_popup(GTK_POPOVER(state->address_popover));
         gtk_popover_present(GTK_POPOVER(state->address_popover));
     }
@@ -1752,16 +1811,6 @@ gboolean focus_address_deferred(void *data) {
     return G_SOURCE_REMOVE;
 }
 
-gboolean select_address_deferred(void *data) {
-    auto *state = static_cast<WindowState *>(data);
-    if (!state->closed) gtk_editable_select_region(GTK_EDITABLE(state->address), 0, -1);
-    return G_SOURCE_REMOVE;
-}
-
-void address_focus_changed(GtkWidget *widget, GParamSpec *, WindowState *state) {
-    if (gtk_widget_has_focus(widget)) g_timeout_add(20, select_address_deferred, state);
-}
-
 TabState *new_tab(WindowState *state, const std::string &uri, bool load_initial) {
     auto owned = std::make_unique<TabState>();
     auto *tab = owned.get();
@@ -1868,6 +1917,11 @@ gboolean key_pressed(GtkEventControllerKey *, guint keyval, guint,
                      GdkModifierType modifiers, WindowState *state) {
     const bool control = (modifiers & GDK_CONTROL_MASK) != 0;
     const bool alternate = (modifiers & GDK_ALT_MASK) != 0;
+    if (control && keyval >= GDK_KEY_1 && keyval <= GDK_KEY_9) {
+        const auto index = static_cast<std::size_t>(keyval - GDK_KEY_1);
+        if (index < state->tabs.size()) select_tab(state->tabs[index].get());
+        return TRUE;
+    }
     if (control && (keyval == GDK_KEY_l || keyval == GDK_KEY_L)) {
         gtk_widget_grab_focus(state->address);
         gtk_editable_select_region(GTK_EDITABLE(state->address), 0, -1);
@@ -1963,7 +2017,7 @@ void install_style(GtkWidget *window) {
         ".address-wrap entry { min-height: 30px; padding: 0 38px 0 12px; border-radius: 8px; border: 1px solid #45433f; background: #191918; color: #f1ede3; box-shadow: none; }"
         ".toolbar entry:focus { border-color: #ff8a62; box-shadow: 0 0 0 1px #ff8a62; }"
         ".address-suggestions contents { padding: 7px; border: 1px solid #474641; border-radius: 10px; background: #2c2c2c; }"
-        ".address-suggestion { min-width: 520px; padding: 8px 11px; border: 0; border-radius: 7px; background: transparent; color: #eee9df; box-shadow: none; }"
+        ".address-suggestion { min-width: 0; padding: 8px 11px; border: 0; border-radius: 7px; background: transparent; color: #eee9df; box-shadow: none; }"
         ".address-suggestion:hover { background: #45433f; }.address-suggestion .suggestion-uri { color: #aaa59c; font-size: 12px; }"
         ".address-bookmark { margin-right: 4px; }"
         ".main-menu contents { padding: 8px; border: 1px solid #474641; border-radius: 12px; background: #2c2c2c; }"
@@ -2023,6 +2077,12 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     auto *tab_strip = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
     gtk_widget_add_css_class(tab_strip, "tab-strip");
     state->tab_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    state->tab_scroller = gtk_scrolled_window_new();
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(state->tab_scroller),
+        GTK_POLICY_EXTERNAL, GTK_POLICY_NEVER);
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(state->tab_scroller), state->tab_box);
+    gtk_widget_set_size_request(state->tab_scroller, 184, -1);
+    gtk_widget_set_hexpand(state->tab_scroller, TRUE);
     auto *new_button = gtk_button_new();
     gtk_widget_add_css_class(new_button, "flat");
     gtk_widget_set_tooltip_text(new_button, "New tab");
@@ -2045,7 +2105,7 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     g_signal_connect(new_tab_motion, "enter", G_CALLBACK(new_tab_pointer_entered), state);
     g_signal_connect(new_tab_motion, "leave", G_CALLBACK(new_tab_pointer_left), state);
     gtk_widget_add_controller(new_button, new_tab_motion);
-    gtk_box_append(GTK_BOX(tab_strip), state->tab_box);
+    gtk_box_append(GTK_BOX(tab_strip), state->tab_scroller);
     gtk_box_append(GTK_BOX(tab_strip), new_button);
     gtk_widget_set_hexpand(tab_strip, TRUE);
     gtk_header_bar_pack_start(GTK_HEADER_BAR(header), tab_strip);
@@ -2057,6 +2117,9 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     g_signal_connect(header_middle, "pressed", G_CALLBACK(header_middle_pressed), state);
     g_signal_connect(header_middle, "released", G_CALLBACK(header_middle_released), state);
     gtk_widget_add_controller(header, GTK_EVENT_CONTROLLER(header_middle));
+    auto *tab_scroll = gtk_event_controller_scroll_new(GTK_EVENT_CONTROLLER_SCROLL_VERTICAL);
+    g_signal_connect(tab_scroll, "scroll", G_CALLBACK(tab_strip_scrolled), state);
+    gtk_widget_add_controller(tab_strip, tab_scroll);
     gtk_window_set_titlebar(GTK_WINDOW(state->window), header);
 
     auto *layout = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
@@ -2095,9 +2158,7 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     gtk_popover_set_autohide(GTK_POPOVER(state->address_popover), TRUE);
     state->address_suggestions = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
     gtk_popover_set_child(GTK_POPOVER(state->address_popover), state->address_suggestions);
-    gtk_widget_set_halign(state->address_popover, GTK_ALIGN_FILL);
-    gtk_widget_set_valign(state->address_popover, GTK_ALIGN_END);
-    gtk_overlay_add_overlay(GTK_OVERLAY(address_wrap), state->address_popover);
+    gtk_widget_set_parent(state->address_popover, state->address);
     state->bookmark_button = icon_button("non-starred-symbolic", "Bookmark this tab");
     gtk_widget_add_css_class(state->bookmark_button, "address-bookmark");
     gtk_widget_set_halign(state->bookmark_button, GTK_ALIGN_END);
@@ -2186,10 +2247,15 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     g_signal_connect(state->reload_stop, "clicked", G_CALLBACK(reload_or_stop), state);
     g_signal_connect(state->address, "activate", G_CALLBACK(submit_address), state);
     g_signal_connect(state->address, "changed", G_CALLBACK(address_changed), state);
-    g_signal_connect(state->address, "notify::has-focus", G_CALLBACK(address_focus_changed), state);
     auto *address_keys = gtk_event_controller_key_new();
     g_signal_connect(address_keys, "key-pressed", G_CALLBACK(address_key_pressed), state);
     gtk_widget_add_controller(state->address, address_keys);
+    auto *reload_keys = gtk_event_controller_key_new();
+    g_signal_connect(reload_keys, "key-pressed", G_CALLBACK(toolbar_focus_key), state);
+    gtk_widget_add_controller(state->reload_stop, reload_keys);
+    auto *bookmark_keys = gtk_event_controller_key_new();
+    g_signal_connect(bookmark_keys, "key-pressed", G_CALLBACK(toolbar_focus_key), state);
+    gtk_widget_add_controller(state->bookmark_button, bookmark_keys);
     g_signal_connect(state->bookmark_button, "clicked", G_CALLBACK(toggle_bookmark), state);
     g_signal_connect(state->find_entry, "changed", G_CALLBACK(find_changed), state);
     g_signal_connect(state->find_entry, "activate", G_CALLBACK(find_activate), state);
