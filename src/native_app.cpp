@@ -44,6 +44,7 @@ struct WindowState {
     GtkWidget *tab_box{};
     GtkWidget *stack{};
     WebKitWebView *view{};
+    TabState *middle_pressed_tab{};
     std::vector<std::unique_ptr<TabState>> tabs;
     vantage::NavigationPolicy policy;
     bool smoke{};
@@ -255,6 +256,7 @@ void close_tab(TabState *tab) {
     const auto found = std::find_if(state->tabs.begin(), state->tabs.end(),
         [tab](const auto &candidate) { return candidate.get() == tab; });
     if (found == state->tabs.end()) return;
+    if (state->middle_pressed_tab == tab) state->middle_pressed_tab = nullptr;
     const auto index = static_cast<std::size_t>(std::distance(state->tabs.begin(), found));
     const bool was_active = state->view == tab->view;
     gtk_box_remove(GTK_BOX(state->tab_box), tab->tab);
@@ -279,18 +281,29 @@ void queue_tab_close(TabState *tab) {
 }
 void tab_closed(GtkButton *, TabState *tab) { queue_tab_close(tab); }
 
-void header_middle_pressed(GtkGestureClick *gesture, int, double x, double y, WindowState *state) {
-    auto *header = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(gesture));
-    gtk_gesture_set_state(GTK_GESTURE(gesture), GTK_EVENT_SEQUENCE_CLAIMED);
+TabState *tab_at(WindowState *state, GtkWidget *header, double x, double y) {
     for (const auto &tab : state->tabs) {
         graphene_rect_t bounds;
         if (!gtk_widget_compute_bounds(tab->tab, header, &bounds)) continue;
         if (x >= bounds.origin.x && x <= bounds.origin.x + bounds.size.width &&
             y >= bounds.origin.y && y <= bounds.origin.y + bounds.size.height) {
-            queue_tab_close(tab.get());
-            return;
+            return tab.get();
         }
     }
+    return nullptr;
+}
+
+void header_middle_pressed(GtkGestureClick *gesture, int, double x, double y, WindowState *state) {
+    auto *header = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(gesture));
+    gtk_gesture_set_state(GTK_GESTURE(gesture), GTK_EVENT_SEQUENCE_CLAIMED);
+    state->middle_pressed_tab = tab_at(state, header, x, y);
+}
+
+void header_middle_released(GtkGestureClick *gesture, int, double x, double y, WindowState *state) {
+    auto *header = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(gesture));
+    auto *pressed = state->middle_pressed_tab;
+    state->middle_pressed_tab = nullptr;
+    if (pressed && tab_at(state, header, x, y) == pressed) queue_tab_close(pressed);
 }
 void add_tab(GtkButton *, WindowState *state) { new_tab(state, "vantage:new"); }
 
@@ -533,6 +546,7 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     gtk_gesture_single_set_exclusive(GTK_GESTURE_SINGLE(header_middle), TRUE);
     gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(header_middle), GTK_PHASE_CAPTURE);
     g_signal_connect(header_middle, "pressed", G_CALLBACK(header_middle_pressed), state);
+    g_signal_connect(header_middle, "released", G_CALLBACK(header_middle_released), state);
     gtk_widget_add_controller(header, GTK_EVENT_CONTROLLER(header_middle));
     gtk_window_set_titlebar(GTK_WINDOW(state->window), header);
 
