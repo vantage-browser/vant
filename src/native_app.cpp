@@ -20,11 +20,15 @@ struct TabState {
     GtkWidget *page{};
     WebKitWebView *view{};
     GtkWidget *tab{};
+    GtkWidget *body{};
+    GtkWidget *left_curve{};
+    GtkWidget *right_curve{};
     GtkWidget *label{};
     GtkWidget *icon_stack{};
     GtkWidget *favicon{};
     GtkWidget *spinner{};
     std::string internal_uri;
+    bool closing{};
 };
 
 struct WindowState {
@@ -59,8 +63,10 @@ void load_decision(TabState *tab, const vantage::NavigationDecision &decision) {
         webkit_web_view_load_html(tab->view,
             "<!doctype html><meta charset=utf-8><title>Vantage Browser</title><style>html{color-scheme:dark}body{margin:0;background:#11100f;color:#f1ede3;font:18px system-ui;display:grid;place-items:center;height:100vh}main{text-align:center}b{color:#ff725e;font-size:42px}</style><main><b>Vantage</b><p>A clearer point of view on the web.</p></main>",
             nullptr);
-        if (tab->window->view == tab->view)
-            gtk_editable_set_text(GTK_EDITABLE(tab->window->address), decision.uri.c_str());
+        if (tab->window->view == tab->view) {
+            const char *shown = decision.uri == "vantage:new" ? "" : decision.uri.c_str();
+            gtk_editable_set_text(GTK_EDITABLE(tab->window->address), shown);
+        }
     }
 }
 
@@ -103,7 +109,8 @@ void sync_active_chrome(WindowState *state) {
 
     if (auto *tab = find_tab(state, state->view)) {
         const char *uri = webkit_web_view_get_uri(state->view);
-        const std::string shown = !tab->internal_uri.empty() ? tab->internal_uri : (uri ? uri : "");
+        const std::string shown = tab->internal_uri == "vantage:new" ? "" :
+            (!tab->internal_uri.empty() ? tab->internal_uri : (uri ? uri : ""));
         if (!gtk_widget_has_focus(state->address))
             gtk_editable_set_text(GTK_EDITABLE(state->address), shown.c_str());
         const char *title = webkit_web_view_get_title(state->view);
@@ -182,13 +189,44 @@ void select_tab(TabState *tab) {
     state->view = tab->view;
     gtk_stack_set_visible_child(GTK_STACK(state->stack), tab->page);
     for (const auto &candidate : state->tabs) {
-        if (candidate.get() == tab) gtk_widget_add_css_class(candidate->tab, "active");
-        else gtk_widget_remove_css_class(candidate->tab, "active");
+        if (candidate.get() == tab) {
+            gtk_widget_add_css_class(candidate->body, "active");
+            gtk_widget_remove_css_class(candidate->body, "inactive");
+        } else {
+            gtk_widget_remove_css_class(candidate->body, "active");
+            gtk_widget_add_css_class(candidate->body, "inactive");
+        }
+        gtk_widget_queue_draw(candidate->left_curve);
+        gtk_widget_queue_draw(candidate->right_curve);
     }
     sync_active_chrome(state);
 }
 
 void tab_selected(GtkButton *, TabState *tab) { select_tab(tab); }
+
+void draw_tab_curve(GtkDrawingArea *area, cairo_t *cr, int width, int height, void *data) {
+    auto *tab = static_cast<TabState *>(data);
+    if (tab->window->view != tab->view) return;
+    const bool left = gtk_widget_has_css_class(GTK_WIDGET(area), "left-curve");
+    cairo_set_source_rgb(cr, 0x24 / 255.0, 0x24 / 255.0, 0x23 / 255.0);
+    cairo_new_path(cr);
+    if (left) {
+        cairo_move_to(cr, width, 0);
+        cairo_line_to(cr, width, height);
+        cairo_line_to(cr, 0, height);
+        cairo_curve_to(cr, width * 0.55, height, width, height * 0.5, width, 0);
+    } else {
+        cairo_move_to(cr, 0, 0);
+        cairo_line_to(cr, 0, height);
+        cairo_line_to(cr, width, height);
+        cairo_curve_to(cr, width * 0.45, height, 0, height * 0.5, 0, 0);
+    }
+    cairo_close_path(cr);
+    cairo_fill_preserve(cr);
+    cairo_set_source_rgb(cr, 0x39 / 255.0, 0x39 / 255.0, 0x36 / 255.0);
+    cairo_set_line_width(cr, 1);
+    cairo_stroke(cr);
+}
 
 void close_tab(TabState *tab) {
     auto *state = tab->window;
@@ -207,7 +245,22 @@ void close_tab(TabState *tab) {
     }
 }
 
-void tab_closed(GtkButton *, TabState *tab) { close_tab(tab); }
+gboolean close_tab_deferred(void *data) {
+    close_tab(static_cast<TabState *>(data));
+    return G_SOURCE_REMOVE;
+}
+
+void queue_tab_close(TabState *tab) {
+    if (tab->closing) return;
+    tab->closing = true;
+    g_idle_add(close_tab_deferred, tab);
+}
+void tab_closed(GtkButton *, TabState *tab) { queue_tab_close(tab); }
+
+void tab_pointer_released(GtkGestureClick *gesture, int, double, double, TabState *tab) {
+    if (gtk_gesture_single_get_current_button(GTK_GESTURE_SINGLE(gesture)) == GDK_BUTTON_MIDDLE)
+        queue_tab_close(tab);
+}
 void add_tab(GtkButton *, WindowState *state) { new_tab(state, "vantage:new"); }
 
 GtkWidget *icon_button(const char *icon, const char *tooltip) {
@@ -228,15 +281,24 @@ TabState *new_tab(WindowState *state, const std::string &uri) {
 
     tab->tab = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
     gtk_widget_add_css_class(tab->tab, "browser-tab");
+    tab->left_curve = gtk_drawing_area_new();
+    gtk_widget_add_css_class(tab->left_curve, "left-curve");
+    gtk_widget_set_size_request(tab->left_curve, 9, 10);
+    gtk_widget_set_valign(tab->left_curve, GTK_ALIGN_END);
+    gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(tab->left_curve), draw_tab_curve, tab, nullptr);
+    tab->body = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_add_css_class(tab->body, "browser-tab-body");
+    auto *hover_surface = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_add_css_class(hover_surface, "tab-hover-surface");
     auto *select = gtk_button_new();
     gtk_widget_add_css_class(select, "tab-select");
     auto *tab_content = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 7);
     tab->icon_stack = gtk_stack_new();
-    gtk_widget_set_size_request(tab->icon_stack, 16, 16);
+    gtk_widget_set_size_request(tab->icon_stack, 18, 18);
     tab->favicon = gtk_image_new_from_icon_name("web-browser-symbolic");
-    gtk_image_set_pixel_size(GTK_IMAGE(tab->favicon), 16);
+    gtk_image_set_pixel_size(GTK_IMAGE(tab->favicon), 18);
     tab->spinner = gtk_spinner_new();
-    gtk_widget_set_size_request(tab->spinner, 16, 16);
+    gtk_widget_set_size_request(tab->spinner, 18, 18);
     gtk_stack_add_child(GTK_STACK(tab->icon_stack), tab->favicon);
     gtk_stack_add_child(GTK_STACK(tab->icon_stack), tab->spinner);
     tab->label = gtk_label_new("New tab");
@@ -247,12 +309,25 @@ TabState *new_tab(WindowState *state, const std::string &uri) {
     gtk_button_set_child(GTK_BUTTON(select), tab_content);
     auto *close = icon_button("window-close-symbolic", "Close tab");
     gtk_widget_add_css_class(close, "tab-close");
-    gtk_box_append(GTK_BOX(tab->tab), select);
-    gtk_box_append(GTK_BOX(tab->tab), close);
+    gtk_box_append(GTK_BOX(hover_surface), select);
+    gtk_box_append(GTK_BOX(hover_surface), close);
+    gtk_box_append(GTK_BOX(tab->body), hover_surface);
+    tab->right_curve = gtk_drawing_area_new();
+    gtk_widget_add_css_class(tab->right_curve, "right-curve");
+    gtk_widget_set_size_request(tab->right_curve, 9, 10);
+    gtk_widget_set_valign(tab->right_curve, GTK_ALIGN_END);
+    gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(tab->right_curve), draw_tab_curve, tab, nullptr);
+    gtk_box_append(GTK_BOX(tab->tab), tab->left_curve);
+    gtk_box_append(GTK_BOX(tab->tab), tab->body);
+    gtk_box_append(GTK_BOX(tab->tab), tab->right_curve);
     gtk_box_append(GTK_BOX(state->tab_box), tab->tab);
 
     g_signal_connect(select, "clicked", G_CALLBACK(tab_selected), tab);
     g_signal_connect(close, "clicked", G_CALLBACK(tab_closed), tab);
+    auto *middle_click = gtk_gesture_click_new();
+    gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(middle_click), GDK_BUTTON_MIDDLE);
+    g_signal_connect(middle_click, "released", G_CALLBACK(tab_pointer_released), tab);
+    gtk_widget_add_controller(tab->tab, GTK_EVENT_CONTROLLER(middle_click));
     g_signal_connect(tab->view, "notify::uri", G_CALLBACK(uri_changed), tab);
     g_signal_connect(tab->view, "notify::title", G_CALLBACK(title_changed), tab);
     g_signal_connect(tab->view, "notify::is-loading", G_CALLBACK(loading_changed), tab);
@@ -317,23 +392,26 @@ void install_style(GtkWidget *window) {
     gtk_css_provider_load_from_string(provider,
         "window { background: #171716; color: #ece8df; }"
         "headerbar { min-height: 34px; padding: 0 6px; background: #242423; box-shadow: none; border-bottom: 1px solid #393936; }"
-        ".tab-strip { margin-top: 3px; }"
-        ".browser-tab { min-width: 150px; margin-right: 2px; border-radius: 9px 9px 0 0; background: transparent; }"
-        ".browser-tab:hover { background: #343432; }"
-        ".browser-tab.active, .browser-tab.active:hover { background: #41403d; }"
-        ".browser-tab button { min-height: 28px; padding: 0 7px; border: 0; background: transparent; box-shadow: none; color: #d8d4cc; }"
+        ".tab-strip { margin-top: 8px; }"
+        ".browser-tab { min-width: 150px; margin-right: 0; background: transparent; }"
+        ".browser-tab-body { margin-top: 3px; border-radius: 8px 8px 0 0; background: transparent; }"
+        ".browser-tab-body.active { margin-top: 0; background: #242423; border: 1px solid #393936; border-bottom-width: 0; }"
+        ".tab-hover-surface { margin: 2px 3px; border-radius: 7px; background: transparent; }"
+        ".browser-tab-body.inactive .tab-hover-surface:hover { background: #353432; }"
+        ".browser-tab button { min-height: 26px; padding: 0 7px; border: 0; background: transparent; box-shadow: none; color: #d8d4cc; }"
         ".browser-tab .tab-select { min-width: 112px; }"
         ".browser-tab .tab-close { min-width: 20px; padding: 0 4px; opacity: 0; }"
-        ".browser-tab:hover .tab-close, .browser-tab.active .tab-close { opacity: 1; }"
+        ".browser-tab:hover .tab-close, .browser-tab-body.active .tab-close { opacity: 1; }"
         ".browser-tab button:hover { background: transparent; }"
-        ".browser-tab .tab-close:hover { border-radius: 999px; background: #5a5751; }"
+        ".browser-tab .tab-close:hover { background: transparent; color: #ff7657; }"
         ".new-tab { min-width: 28px; min-height: 28px; margin-left: 3px; }"
         ".navigation { background: #242423; border-bottom: 1px solid #393936; }"
         ".toolbar { padding: 6px 8px; }"
         ".toolbar button.flat, .new-tab.flat { min-width: 28px; min-height: 28px; padding: 2px; border: 0; border-radius: 7px; background: transparent; color: #d8d4cc; box-shadow: none; }"
         ".toolbar button.flat:hover, .new-tab.flat:hover { background: #3a3936; color: #fffaf0; }"
         ".toolbar button.flat:active, .new-tab.flat:active { background: #494741; }"
-        ".toolbar button.stop-loading { font-size: 22px; font-weight: 400; }"
+        ".toolbar button.stop-loading { font-size: 26px; font-weight: 400; }"
+        ".toolbar button.history-button { font-size: 20px; font-weight: 400; }"
         ".toolbar entry { min-height: 30px; padding: 0 12px; border-radius: 8px; border: 1px solid #45433f; background: #191918; color: #f1ede3; box-shadow: none; }"
         ".toolbar entry:focus { border-color: #ff8a62; box-shadow: 0 0 0 1px #ff8a62; }"
         ".browser-tab spinner { color: #ff8a62; }"
@@ -369,8 +447,14 @@ void activate(GtkApplication *application, void *user_data) {
     auto *layout = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     auto *toolbar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
     gtk_widget_add_css_class(toolbar, "toolbar");
-    auto *back = icon_button("go-previous-symbolic", "Back");
-    auto *forward = icon_button("go-next-symbolic", "Forward");
+    auto *back = gtk_button_new_with_label("←");
+    auto *forward = gtk_button_new_with_label("→");
+    for (auto *button : {back, forward}) {
+        gtk_widget_add_css_class(button, "flat");
+        gtk_widget_add_css_class(button, "history-button");
+    }
+    gtk_widget_set_tooltip_text(back, "Back");
+    gtk_widget_set_tooltip_text(forward, "Forward");
     state->reload_stop = icon_button("view-refresh-symbolic", "Reload");
     state->address = gtk_entry_new();
     gtk_widget_set_hexpand(state->address, TRUE);
@@ -410,7 +494,6 @@ void activate(GtkApplication *application, void *user_data) {
     if (!initial || std::string_view(initial).starts_with("vantage:") ||
         std::string_view(initial).starts_with("about:")) {
         gtk_widget_grab_focus(state->address);
-        gtk_editable_select_region(GTK_EDITABLE(state->address), 0, -1);
     }
     if (state->smoke) {
         webkit_web_view_load_html(tab->view, "<!doctype html><title>Vant smoke</title><p>ok</p>", "https://smoke.invalid/");
