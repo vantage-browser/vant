@@ -25,7 +25,8 @@ void load_decision(WindowState *state, const vantage::NavigationDecision &decisi
     } else if (decision.kind == vantage::NavigationKind::internal) {
         webkit_web_view_load_html(state->view,
             "<!doctype html><meta charset=utf-8><style>html{color-scheme:dark}body{margin:0;background:#11100f;color:#f1ede3;font:18px system-ui;display:grid;place-items:center;height:100vh}main{text-align:center}b{color:#ff725e;font-size:42px}</style><main><b>Vantage</b><p>A clearer point of view on the web.</p></main>",
-            "vantage://internal/");
+            nullptr);
+        gtk_editable_set_text(GTK_EDITABLE(state->address), decision.uri.c_str());
     }
 }
 
