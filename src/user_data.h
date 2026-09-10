@@ -31,6 +31,7 @@ public:
                               const std::string &status, std::int64_t created_at);
     void update_download(std::int64_t id, const std::string &status);
     void update_download_progress(std::int64_t id, std::uint64_t received, std::uint64_t total);
+    void reconcile_downloads();
     void remove_download(std::int64_t id);
     std::vector<DownloadEntry> downloads(std::size_t limit = 500) const;
     void set_permission(const std::string &origin, const std::string &capability, Permission permission);
