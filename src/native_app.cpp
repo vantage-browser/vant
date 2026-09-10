@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cctype>
+#include <cstring>
 #include <filesystem>
 #include <iomanip>
 #include <memory>
@@ -52,6 +53,9 @@ struct WindowState {
     GtkWidget *reload_icon{};
     GtkWidget *stop_icon{};
     GtkWidget *progress{};
+    GtkWidget *find_bar{};
+    GtkWidget *find_entry{};
+    GtkWidget *find_count{};
     GtkWidget *bookmark_button{};
     GtkWidget *menu_button{};
     GtkWidget *downloads_button{};
@@ -73,6 +77,8 @@ struct WindowState {
     bool closed{};
     bool new_tab_hovered{};
     double progress_fraction{};
+    unsigned find_current{};
+    unsigned find_total{};
     ~WindowState() { if (private_session) g_object_unref(private_session); }
 };
 
@@ -93,13 +99,139 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
 std::string format_bytes(std::uint64_t bytes);
 void cancel_download(ApplicationState *owner, std::int64_t id);
 void address_changed(GtkEditable *, WindowState *state);
+std::string html_escape(std::string_view value);
+
+void update_find_count(WindowState *state) {
+    const auto label = state->find_total ? std::to_string(state->find_current) + " / " +
+        std::to_string(state->find_total) : "0 / 0";
+    gtk_label_set_text(GTK_LABEL(state->find_count), label.c_str());
+}
+
+void find_counted(WebKitFindController *, guint count, WindowState *state) {
+    state->find_total = count;
+    state->find_current = count ? 1 : 0;
+    update_find_count(state);
+}
+
+void find_changed(GtkEditable *entry, WindowState *state) {
+    if (!state->view) return;
+    auto *controller = webkit_web_view_get_find_controller(state->view);
+    const char *text = gtk_editable_get_text(entry);
+    if (!text || !*text) {
+        webkit_find_controller_search_finish(controller);
+        state->find_current = state->find_total = 0;
+        update_find_count(state);
+        return;
+    }
+    constexpr guint32 options = WEBKIT_FIND_OPTIONS_CASE_INSENSITIVE | WEBKIT_FIND_OPTIONS_WRAP_AROUND;
+    webkit_find_controller_search(controller, text, options, G_MAXUINT);
+    webkit_find_controller_count_matches(controller, text, options, G_MAXUINT);
+}
+
+void find_next(GtkButton *, WindowState *state) {
+    if (!state->view || !state->find_total) return;
+    webkit_find_controller_search_next(webkit_web_view_get_find_controller(state->view));
+    state->find_current = state->find_current % state->find_total + 1;
+    update_find_count(state);
+}
+
+void find_activate(GtkEntry *, WindowState *state) { find_next(nullptr, state); }
+
+void find_previous(GtkButton *, WindowState *state) {
+    if (!state->view || !state->find_total) return;
+    webkit_find_controller_search_previous(webkit_web_view_get_find_controller(state->view));
+    state->find_current = state->find_current <= 1 ? state->find_total : state->find_current - 1;
+    update_find_count(state);
+}
+
+void close_find(GtkButton *, WindowState *state) {
+    if (state->view) webkit_find_controller_search_finish(webkit_web_view_get_find_controller(state->view));
+    gtk_widget_set_visible(state->find_bar, FALSE);
+    if (state->view) gtk_widget_grab_focus(GTK_WIDGET(state->view));
+}
+
+void show_find(WindowState *state) {
+    gtk_widget_set_visible(state->find_bar, TRUE);
+    gtk_widget_grab_focus(state->find_entry);
+    gtk_editable_select_region(GTK_EDITABLE(state->find_entry), 0, -1);
+}
 
 enum class ContextOpen { tab, window };
-struct ContextOpenData { WindowState *window{}; std::string uri; ContextOpen mode{}; };
+struct ContextOpenData { WindowState *window{}; std::string uri; ContextOpen mode{}; bool image{}; };
+struct ImageDataAction { WindowState *window{}; std::string uri; bool save{}; };
+
+GBytes *decode_data_uri(const std::string &uri) {
+    const auto comma = uri.find(',');
+    if (comma == std::string::npos) return nullptr;
+    const auto metadata = std::string_view(uri).substr(0, comma);
+    if (metadata.ends_with(";base64")) {
+        gsize size = 0;
+        auto *decoded = g_base64_decode(uri.c_str() + comma + 1, &size);
+        return g_bytes_new_take(decoded, size);
+    }
+    auto *decoded = g_uri_unescape_string(uri.c_str() + comma + 1, nullptr);
+    return decoded ? g_bytes_new_take(decoded, std::strlen(decoded)) : nullptr;
+}
+
+struct SaveImageData { GtkFileDialog *dialog{}; GBytes *bytes{}; };
+
+void image_save_chosen(GObject *source, GAsyncResult *result, void *data) {
+    auto *save = static_cast<SaveImageData *>(data);
+    GError *error = nullptr;
+    auto *file = gtk_file_dialog_save_finish(GTK_FILE_DIALOG(source), result, &error);
+    if (file) {
+        gsize size = 0;
+        const auto *bytes = static_cast<const char *>(g_bytes_get_data(save->bytes, &size));
+        g_file_replace_contents(file, bytes, size, nullptr, FALSE, G_FILE_CREATE_REPLACE_DESTINATION,
+            nullptr, nullptr, &error);
+        g_object_unref(file);
+    }
+    if (error) g_error_free(error);
+    g_bytes_unref(save->bytes);
+    g_object_unref(save->dialog);
+    delete save;
+}
+
+void image_data_action(GSimpleAction *, GVariant *, void *data) {
+    const auto *action = static_cast<const ImageDataAction *>(data);
+    auto *bytes = decode_data_uri(action->uri);
+    if (!bytes) return;
+    if (!action->save) {
+        GError *error = nullptr;
+        auto *texture = gdk_texture_new_from_bytes(bytes, &error);
+        if (texture) {
+            gdk_clipboard_set_texture(gtk_widget_get_clipboard(action->window->window), texture);
+            g_object_unref(texture);
+        }
+        if (error) g_error_free(error);
+        g_bytes_unref(bytes);
+        return;
+    }
+    auto *dialog = gtk_file_dialog_new();
+    gtk_file_dialog_set_title(dialog, "Save image as");
+    const auto semicolon = action->uri.find(';');
+    const auto mime = semicolon == std::string::npos ? std::string{} : action->uri.substr(11, semicolon - 11);
+    const std::string extension = mime == "png" ? ".png" : mime == "webp" ? ".webp" :
+        mime == "jpeg" ? ".jpg" : mime == "svg+xml" ? ".svg" : ".img";
+    gtk_file_dialog_set_initial_name(dialog, ("image" + extension).c_str());
+    auto *save = new SaveImageData{GTK_FILE_DIALOG(g_object_ref(dialog)), bytes};
+    gtk_file_dialog_save(dialog, GTK_WINDOW(action->window->window), nullptr, image_save_chosen, save);
+    g_object_unref(dialog);
+}
+
+void append_image_data_action(WebKitContextMenu *menu, WindowState *window, const char *uri,
+                              const char *label, bool save) {
+    auto *action = g_simple_action_new(save ? "save-data-image" : "copy-data-image", nullptr);
+    auto *data = new ImageDataAction{window, uri ? uri : "", save};
+    g_signal_connect_data(action, "activate", G_CALLBACK(image_data_action), data,
+        [](void *value, GClosure *) { delete static_cast<ImageDataAction *>(value); }, G_CONNECT_DEFAULT);
+    webkit_context_menu_append(menu, webkit_context_menu_item_new_from_gaction(G_ACTION(action), label, nullptr));
+    g_object_unref(action);
+}
 
 void context_open(GSimpleAction *, GVariant *, void *data) {
     const auto *open = static_cast<const ContextOpenData *>(data);
-    if (open->uri.starts_with("data:image/")) {
+    if (open->image) {
         WindowState *target = open->window;
         TabState *tab = nullptr;
         if (open->mode == ContextOpen::window) {
@@ -109,16 +241,20 @@ void context_open(GSimpleAction *, GVariant *, void *data) {
         } else tab = new_tab(target, "vantage:new");
         if (tab) {
             tab->internal_uri.clear();
-            webkit_web_view_load_uri(tab->view, open->uri.c_str());
+            const auto page = "<!doctype html><html><head><meta charset=utf-8><title>Image</title><style>"
+                "html{color-scheme:dark}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#20201f}"
+                "img{display:block;max-width:100%;max-height:100vh;object-fit:contain}</style></head><body><img src='" +
+                html_escape(open->uri) + "' alt=''></body></html>";
+            webkit_web_view_load_html(tab->view, page.c_str(), nullptr);
         }
     } else if (open->mode == ContextOpen::tab) new_tab(open->window, open->uri);
     else create_window(open->window->owner, open->uri, false, open->window);
 }
 
 void append_context_open(WebKitContextMenu *menu, WindowState *window, const char *uri,
-                         const char *label, ContextOpen mode) {
-    auto *action = g_simple_action_new("context-open", nullptr);
-    auto *data = new ContextOpenData{window, uri ? uri : "", mode};
+                         const char *label, ContextOpen mode, bool image = false) {
+    auto *action = g_simple_action_new(mode == ContextOpen::tab ? "context-open-tab" : "context-open-window", nullptr);
+    auto *data = new ContextOpenData{window, uri ? uri : "", mode, image};
     g_signal_connect_data(action, "activate", G_CALLBACK(context_open), data,
         [](void *value, GClosure *) { delete static_cast<ContextOpenData *>(value); }, G_CONNECT_DEFAULT);
     auto *item = webkit_context_menu_item_new_from_gaction(G_ACTION(action), label, nullptr);
@@ -142,12 +278,17 @@ gboolean context_menu(WebKitWebView *, WebKitContextMenu *menu,
     if (link && image) webkit_context_menu_append(menu, webkit_context_menu_item_new_separator());
     if (image) {
         const char *uri = webkit_hit_test_result_get_image_uri(hit);
-        append_context_open(menu, tab->window, uri, "Open image in new tab", ContextOpen::tab);
-        append_context_open(menu, tab->window, uri, "Open image in new window", ContextOpen::window);
-        webkit_context_menu_append(menu, webkit_context_menu_item_new_from_stock_action_with_label(
-            WEBKIT_CONTEXT_MENU_ACTION_DOWNLOAD_IMAGE_TO_DISK, "Save image as…"));
-        webkit_context_menu_append(menu, webkit_context_menu_item_new_from_stock_action(
-            WEBKIT_CONTEXT_MENU_ACTION_COPY_IMAGE_TO_CLIPBOARD));
+        append_context_open(menu, tab->window, uri, "Open image in new tab", ContextOpen::tab, true);
+        append_context_open(menu, tab->window, uri, "Open image in new window", ContextOpen::window, true);
+        if (uri && g_str_has_prefix(uri, "data:image/")) {
+            append_image_data_action(menu, tab->window, uri, "Save image as…", true);
+            append_image_data_action(menu, tab->window, uri, "Copy image", false);
+        } else {
+            webkit_context_menu_append(menu, webkit_context_menu_item_new_from_stock_action_with_label(
+                WEBKIT_CONTEXT_MENU_ACTION_DOWNLOAD_IMAGE_TO_DISK, "Save image as…"));
+            webkit_context_menu_append(menu, webkit_context_menu_item_new_from_stock_action(
+                WEBKIT_CONTEXT_MENU_ACTION_COPY_IMAGE_TO_CLIPBOARD));
+        }
         webkit_context_menu_append(menu, webkit_context_menu_item_new_from_stock_action(
             WEBKIT_CONTEXT_MENU_ACTION_COPY_IMAGE_URL_TO_CLIPBOARD));
     }
@@ -164,6 +305,18 @@ std::string html_escape(std::string_view value) {
     std::string result = escaped ? escaped : "";
     g_free(escaped);
     return result;
+}
+
+std::string download_name(const vantage::DownloadEntry &entry) {
+    auto name = std::filesystem::path(entry.destination).filename().string();
+    if (!name.empty()) return name;
+    auto source = entry.uri.substr(0, entry.uri.find_first_of("?#"));
+    const auto slash = source.find_last_of('/');
+    if (slash != std::string::npos) source.erase(0, slash + 1);
+    auto *decoded = g_uri_unescape_string(source.c_str(), nullptr);
+    name = decoded && *decoded ? decoded : "Download";
+    g_free(decoded);
+    return name;
 }
 
 std::string query_value(std::string_view uri, std::string_view key) {
@@ -231,7 +384,7 @@ std::string internal_page(WindowState *state, std::string_view uri) {
     } else if (uri == "vantage:downloads") {
         title = "Downloads";
         for (const auto &entry : state->owner->data->downloads()) {
-            const auto filename = std::filesystem::path(entry.destination).filename().string();
+            const auto filename = download_name(entry);
             const auto extension = std::filesystem::path(filename).extension().string();
             const auto progress = entry.status == "downloading" ? " · " + format_bytes(entry.received) + (entry.total ? " / " + format_bytes(entry.total) : "") : "";
             content += "<div class=item data-search='" + html_escape(filename + " " + entry.uri) + "'><span class=fileicon>" +
@@ -517,6 +670,14 @@ gboolean decide_policy(WebKitWebView *, WebKitPolicyDecision *decision,
     const char *uri = webkit_uri_request_get_uri(request);
     if (!tab->internal_uri.empty() && uri && std::string_view(uri) == "about:blank") return FALSE;
     const std::string_view target = uri ? uri : "";
+    if (type == WEBKIT_POLICY_DECISION_TYPE_NEW_WINDOW_ACTION && !target.starts_with("vantage:")) {
+        const auto resolved_window = tab->window->policy.resolve(target);
+        if (resolved_window.kind == vantage::NavigationKind::web) {
+            webkit_policy_decision_ignore(decision);
+            new_tab(tab->window, resolved_window.uri);
+            return TRUE;
+        }
+    }
     if (webkit_navigation_action_get_mouse_button(action) == GDK_BUTTON_MIDDLE &&
         !target.starts_with("vantage:")) {
         const auto resolved_middle = tab->window->policy.resolve(uri ? uri : "");
@@ -567,11 +728,14 @@ gboolean decide_policy(WebKitWebView *, WebKitPolicyDecision *decision,
                     auto *clipboard = gtk_widget_get_clipboard(tab->window->window);
                     gdk_clipboard_set_text(clipboard, found->uri.c_str());
                 } else if (target.starts_with("vantage:download-show")) {
-                    auto *file = g_file_new_for_path(std::filesystem::path(found->destination).parent_path().c_str());
-                    auto *launcher = gtk_file_launcher_new(file);
-                    gtk_file_launcher_launch(launcher, GTK_WINDOW(tab->window->window), nullptr, nullptr, nullptr);
-                    g_object_unref(launcher);
-                    g_object_unref(file);
+                    if (!found->destination.empty()) {
+                        auto *file = g_file_new_for_path(found->destination.c_str());
+                        auto *launcher = gtk_file_launcher_new(file);
+                        gtk_file_launcher_open_containing_folder(launcher, GTK_WINDOW(tab->window->window),
+                            nullptr, nullptr, nullptr);
+                        g_object_unref(launcher);
+                        g_object_unref(file);
+                    }
                 }
             }
             webkit_policy_decision_ignore(decision);
@@ -595,7 +759,10 @@ gboolean tls_failed(WebKitWebView *, const char *, GTlsCertificate *, GTlsCertif
 
 gboolean load_failed(WebKitWebView *view, WebKitLoadEvent, const char *failing_uri,
                      GError *error, TabState *) {
-    if (g_error_matches(error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) return FALSE;
+    if (g_error_matches(error, G_IO_ERROR, G_IO_ERROR_CANCELLED) ||
+        g_error_matches(error, WEBKIT_NETWORK_ERROR, WEBKIT_NETWORK_ERROR_CANCELLED) ||
+        g_error_matches(error, WEBKIT_POLICY_ERROR,
+            WEBKIT_POLICY_ERROR_FRAME_LOAD_INTERRUPTED_BY_POLICY_CHANGE)) return FALSE;
     auto *escaped_uri = g_markup_escape_text(failing_uri ? failing_uri : "Unknown address", -1);
     auto *escaped_message = g_markup_escape_text(error && error->message ? error->message : "Unknown error", -1);
     const std::string page =
@@ -631,6 +798,7 @@ void select_tab(TabState *tab) {
         gtk_widget_queue_draw(candidate->backdrop);
     }
     sync_active_chrome(state);
+    if (gtk_widget_get_visible(state->find_bar)) find_changed(GTK_EDITABLE(state->find_entry), state);
 }
 
 void tab_selected(GtkButton *, TabState *tab) { select_tab(tab); }
@@ -897,6 +1065,7 @@ struct DownloadContext {
     bool cancelled{};
     bool private_mode{};
     std::string destination;
+    std::string suggested_name;
 };
 
 std::string format_bytes(std::uint64_t bytes) {
@@ -972,6 +1141,7 @@ GtkWidget *download_row(const std::string &name, const std::string &detail, bool
     gtk_widget_set_hexpand(labels, TRUE);
     auto *title = gtk_label_new(name.c_str());
     gtk_label_set_ellipsize(GTK_LABEL(title), PANGO_ELLIPSIZE_END);
+    gtk_label_set_max_width_chars(GTK_LABEL(title), 48);
     gtk_widget_set_halign(title, GTK_ALIGN_START);
     auto *status = gtk_label_new(detail.c_str());
     gtk_label_set_ellipsize(GTK_LABEL(status), PANGO_ELLIPSIZE_MIDDLE);
@@ -1028,7 +1198,7 @@ void rebuild_download_popover(WindowState *state) {
     for (const auto &entry : state->owner->data->downloads(5)) {
         if (entry.status == "downloading") continue;
         gtk_box_append(GTK_BOX(state->downloads_box), download_row(
-            std::filesystem::path(entry.destination).filename().string(), entry.status, false));
+            download_name(entry), entry.status, false));
         if (++shown >= 5) break;
     }
     if (!shown) {
@@ -1065,6 +1235,7 @@ gboolean window_closing(GtkWindow *, WindowState *state) {
 }
 
 gboolean download_destination(WebKitDownload *download, const char *suggested, DownloadContext *context) {
+    context->suggested_name = suggested && *suggested ? suggested : "Download";
     const char *source = webkit_uri_request_get_uri(webkit_download_get_request(download));
     const bool needs_safe_name = !suggested || std::string_view(suggested).size() > 180 ||
         (source && g_str_has_prefix(source, "data:"));
@@ -1103,11 +1274,19 @@ gboolean download_destination(WebKitDownload *download, const char *suggested, D
 }
 
 void download_created_destination(WebKitDownload *download, const char *destination, DownloadContext *context) {
-    GError *error = nullptr;
-    auto *path = destination ? g_filename_from_uri(destination, nullptr, &error) : nullptr;
+    const char *reported = webkit_download_get_destination(download);
+    if (!reported || !*reported) reported = destination;
+    auto *file = reported ? g_file_new_for_uri(reported) : nullptr;
+    auto *path = file ? g_file_get_path(file) : nullptr;
+    if (file) g_object_unref(file);
+    if (!path && reported && g_path_is_absolute(reported)) path = g_strdup(reported);
     if (path) context->destination = path;
     g_free(path);
-    if (error) g_error_free(error);
+    if (context->destination.empty()) {
+        const char *downloads = g_get_user_special_dir(G_USER_DIRECTORY_DOWNLOAD);
+        context->destination = (std::filesystem::path(downloads ? downloads : g_get_home_dir()) /
+            context->suggested_name).string();
+    }
     const char *source = webkit_uri_request_get_uri(webkit_download_get_request(download));
     if (!context->private_mode && context->record == 0)
         context->record = context->owner->data->add_download(source ? source : "", context->destination,
@@ -1151,7 +1330,7 @@ void download_started(WebKitNetworkSession *, WebKitDownload *download, Applicat
     bool private_mode = false;
     for (const auto &window : owner->windows)
         if (find_tab(window.get(), view)) { private_mode = window->private_mode; break; }
-    auto *context = new DownloadContext{owner, WEBKIT_DOWNLOAD(g_object_ref(download)), 0, false, false, private_mode, {}};
+    auto *context = new DownloadContext{owner, WEBKIT_DOWNLOAD(g_object_ref(download)), 0, false, false, private_mode, {}, {}};
     owner->active_downloads.push_back(context);
     refresh_download_chrome(owner);
     g_signal_connect(download, "decide-destination", G_CALLBACK(download_destination), context);
@@ -1305,6 +1484,8 @@ TabState *new_tab(WindowState *state, const std::string &uri) {
     g_signal_connect(tab->view, "decide-policy", G_CALLBACK(decide_policy), tab);
     g_signal_connect(tab->view, "context-menu", G_CALLBACK(context_menu), tab);
     g_signal_connect(tab->view, "load-failed-with-tls-errors", G_CALLBACK(tls_failed), tab);
+    g_signal_connect(webkit_web_view_get_find_controller(tab->view), "counted-matches",
+        G_CALLBACK(find_counted), state);
 
     state->tabs.push_back(std::move(owned));
     select_tab(tab);
@@ -1329,6 +1510,10 @@ gboolean key_pressed(GtkEventControllerKey *, guint keyval, guint,
     if (control && (keyval == GDK_KEY_l || keyval == GDK_KEY_L)) {
         gtk_widget_grab_focus(state->address);
         gtk_editable_select_region(GTK_EDITABLE(state->address), 0, -1);
+        return TRUE;
+    }
+    if (control && (keyval == GDK_KEY_f || keyval == GDK_KEY_F)) {
+        show_find(state);
         return TRUE;
     }
     if (control && (keyval == GDK_KEY_t || keyval == GDK_KEY_T)) {
@@ -1376,6 +1561,10 @@ gboolean key_pressed(GtkEventControllerKey *, guint keyval, guint,
     }
     if (alternate && keyval == GDK_KEY_Right) {
         go_forward(nullptr, state);
+        return TRUE;
+    }
+    if (keyval == GDK_KEY_Escape && gtk_widget_get_visible(state->find_bar)) {
+        close_find(nullptr, state);
         return TRUE;
     }
     if (keyval == GDK_KEY_Escape && state->view && webkit_web_view_is_loading(state->view)) {
@@ -1436,6 +1625,11 @@ void install_style(GtkWidget *window) {
         ".downloads-popover .download-cancel:hover { color: #ff8a62; }"
         ".browser-tab spinner { color: #ff8a62; }"
         ".load-progress { min-width: 0; min-height: 2px; background: transparent; }"
+        ".find-bar { padding: 6px 10px; background: #20201f; border-bottom: 1px solid #393936; }"
+        ".find-bar entry { min-width: 260px; min-height: 30px; padding: 0 11px; border: 1px solid #4a4844; border-radius: 7px; background: #2b2a29; color: #fff; box-shadow: none; }"
+        ".find-bar entry:focus { border-color: #ff8a62; }.find-bar label { color: #aaa59c; min-width: 54px; }"
+        ".find-bar button { min-width: 28px; min-height: 28px; padding: 2px; border: 0; border-radius: 6px; background: transparent; color: #d8d4cc; box-shadow: none; }"
+        ".find-bar button:hover { background: #3a3936; color: #ff8a62; }"
     );
     gtk_style_context_add_provider_for_display(gtk_widget_get_display(window),
         GTK_STYLE_PROVIDER(provider), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
@@ -1589,9 +1783,32 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     gtk_box_append(GTK_BOX(navigation), toolbar);
     gtk_box_append(GTK_BOX(navigation), state->progress);
 
+    state->find_bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    gtk_widget_add_css_class(state->find_bar, "find-bar");
+    gtk_widget_set_halign(state->find_bar, GTK_ALIGN_FILL);
+    auto *find_spacer = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_set_hexpand(find_spacer, TRUE);
+    gtk_box_append(GTK_BOX(state->find_bar), find_spacer);
+    state->find_entry = gtk_entry_new();
+    gtk_entry_set_placeholder_text(GTK_ENTRY(state->find_entry), "Find in page");
+    state->find_count = gtk_label_new("0 / 0");
+    auto *find_up = gtk_button_new_from_icon_name("go-up-symbolic");
+    auto *find_down = gtk_button_new_from_icon_name("go-down-symbolic");
+    auto *find_close = gtk_button_new_from_icon_name("window-close-symbolic");
+    gtk_widget_set_tooltip_text(find_up, "Previous match");
+    gtk_widget_set_tooltip_text(find_down, "Next match");
+    gtk_widget_set_tooltip_text(find_close, "Close");
+    gtk_box_append(GTK_BOX(state->find_bar), state->find_entry);
+    gtk_box_append(GTK_BOX(state->find_bar), state->find_count);
+    gtk_box_append(GTK_BOX(state->find_bar), find_up);
+    gtk_box_append(GTK_BOX(state->find_bar), find_down);
+    gtk_box_append(GTK_BOX(state->find_bar), find_close);
+    gtk_widget_set_visible(state->find_bar, FALSE);
+
     state->stack = gtk_stack_new();
     gtk_widget_set_vexpand(state->stack, TRUE);
     gtk_box_append(GTK_BOX(layout), navigation);
+    gtk_box_append(GTK_BOX(layout), state->find_bar);
     gtk_box_append(GTK_BOX(layout), state->stack);
     gtk_window_set_child(GTK_WINDOW(state->window), layout);
     install_style(state->window);
@@ -1603,6 +1820,11 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     g_signal_connect(state->address, "changed", G_CALLBACK(address_changed), state);
     g_signal_connect(state->address, "notify::has-focus", G_CALLBACK(address_focus_changed), state);
     g_signal_connect(state->bookmark_button, "clicked", G_CALLBACK(toggle_bookmark), state);
+    g_signal_connect(state->find_entry, "changed", G_CALLBACK(find_changed), state);
+    g_signal_connect(state->find_entry, "activate", G_CALLBACK(find_activate), state);
+    g_signal_connect(find_up, "clicked", G_CALLBACK(find_previous), state);
+    g_signal_connect(find_down, "clicked", G_CALLBACK(find_next), state);
+    g_signal_connect(find_close, "clicked", G_CALLBACK(close_find), state);
     g_signal_connect(new_button, "clicked", G_CALLBACK(add_tab), state);
     auto *keys = gtk_event_controller_key_new();
     g_signal_connect(keys, "key-pressed", G_CALLBACK(key_pressed), state);

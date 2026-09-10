@@ -21,6 +21,8 @@
 `Ctrl+N`, `Ctrl+Shift+N`, `Ctrl+T`, `Ctrl+W`, `Ctrl+L`, `Ctrl+R`, `Ctrl+H`,
 `Ctrl+J`, `Ctrl+D`, `Ctrl+Shift+Delete`, `Ctrl+P`, `F5`, `Alt+Left`, `Alt+Right`
 and `Escape` are connected to the native GTK shell. Reopen-tab, command-palette
-and find defaults will be connected as their native surfaces land. Focus traversal
+and command-palette defaults will be connected as their native surfaces land. Find
+opens in a dedicated row below the navigation toolbar; Enter advances to the next
+match, and Escape closes it. Focus traversal
 and screen-reader verification remain part of the target-platform acceptance
 pass.
