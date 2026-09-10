@@ -9,7 +9,7 @@ BUILD := build
 CORE_SOURCES := src/application.cpp src/navigation.cpp src/browser_model.cpp src/session_store.cpp src/user_data.cpp
 CORE_OBJECTS := $(CORE_SOURCES:src/%.cpp=$(BUILD)/%.o)
 
-.PHONY: all test test-unit test-sanitize smoke smoke-native evidence clean
+.PHONY: all test test-unit test-sanitize smoke smoke-native benchmark evidence clean
 all: $(BUILD)/vant
 
 $(BUILD):
@@ -70,6 +70,12 @@ test-sanitize:
 
 evidence: all
 	python3 tools/record_environment.py --output $(BUILD)/environment.json
+
+$(BUILD)/benchmark_model: benchmarks/model.cpp $(CORE_OBJECTS)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(SQLITE_CFLAGS) $^ $(SQLITE_LIBS) -o $@
+
+benchmark: $(BUILD)/benchmark_model
+	./$(BUILD)/benchmark_model
 
 clean:
 	rm -rf $(BUILD)

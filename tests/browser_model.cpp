@@ -20,6 +20,15 @@ int main() {
     assert(vantage::command_for_shortcut("Ctrl+T") == vantage::Command::new_tab);
     assert(!vantage::command_for_shortcut("Ctrl+Alt+Surprise"));
 
+    vantage::BrowserModel lifecycle;
+    for (int i = 0; i < 50; ++i) lifecycle.new_tab("https://example.invalid/" + std::to_string(i));
+    assert(lifecycle.discard_to_limit(10) == 40);
+    assert(!lifecycle.find(*lifecycle.active_tab())->discarded);
+    const auto discarded_id = lifecycle.tabs().front().id;
+    assert(lifecycle.find(discarded_id)->discarded);
+    assert(lifecycle.activate(discarded_id));
+    assert(!lifecycle.find(discarded_id)->discarded);
+
     vantage::BrowserModel stress;
     for (int i = 0; i < 10000; ++i) {
         const auto id = stress.new_tab();

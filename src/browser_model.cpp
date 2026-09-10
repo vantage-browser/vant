@@ -28,10 +28,26 @@ const Tab *BrowserModel::find(TabId id) const {
 }
 
 bool BrowserModel::activate(TabId id) {
-    if (!find(id)) return false;
+    auto *tab = find(id);
+    if (!tab) return false;
+    tab->discarded = false;
     active_ = id;
     focus_ = FocusTarget::page;
     return true;
+}
+
+std::size_t BrowserModel::discard_to_limit(std::size_t resident_limit) {
+    std::size_t resident = static_cast<std::size_t>(std::count_if(tabs_.begin(), tabs_.end(), [](const Tab &tab) { return !tab.discarded; }));
+    std::size_t discarded = 0;
+    for (auto &tab : tabs_) {
+        if (resident <= resident_limit) break;
+        if ((!active_ || tab.id != *active_) && !tab.loading && !tab.discarded) {
+            tab.discarded = true;
+            --resident;
+            ++discarded;
+        }
+    }
+    return discarded;
 }
 
 bool BrowserModel::close_tab(TabId id) {

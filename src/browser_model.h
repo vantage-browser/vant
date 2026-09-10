@@ -29,6 +29,7 @@ public:
     std::optional<TabId> duplicate_tab(TabId id);
     bool move_tab(TabId id, std::size_t destination);
     bool activate(TabId id);
+    std::size_t discard_to_limit(std::size_t resident_limit);
     Tab *find(TabId id);
     const Tab *find(TabId id) const;
     const std::vector<Tab> &tabs() const noexcept { return tabs_; }

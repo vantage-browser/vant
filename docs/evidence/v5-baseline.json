@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "checkpoint": "V5",
+  "status": "accepted-core",
+  "environment": {"platform": "managed Linux x86_64", "compiler": "g++ 13.3.0", "sqlite": "3.45.1"},
+  "verified": ["deterministic 1/10/50-tab core workload", "SQLite save/restore timing", "maximum core-process RSS capture", "bounded discard policy", "active-tab protection", "discarded-tab reactivation", "10000-tab lifecycle churn"],
+  "limitations": ["No display socket is available", "GTK/WebKit process-tree RSS is not measured", "No network or real-site workload", "No cross-browser performance claim"]
+}
