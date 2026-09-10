@@ -30,6 +30,7 @@ struct TabState {
     GtkWidget *spinner{};
     std::string internal_uri;
     bool closing{};
+    bool hovered{};
 };
 
 struct WindowState {
@@ -76,7 +77,15 @@ void load_decision(TabState *tab, const vantage::NavigationDecision &decision) {
     } else if (decision.kind == vantage::NavigationKind::internal) {
         tab->internal_uri = decision.uri;
         webkit_web_view_load_html(tab->view,
-            "<!doctype html><meta charset=utf-8><title>Vantage Browser</title><style>html{color-scheme:dark}body{margin:0;background:#11100f;color:#f1ede3;font:18px system-ui;display:grid;place-items:center;height:100vh}main{text-align:center}b{color:#ff725e;font-size:42px}</style><main><b>Vantage</b><p>A clearer point of view on the web.</p></main>",
+            "<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
+            "<title>New Tab</title><style>html{color-scheme:dark}*{box-sizing:border-box}body{margin:0;min-height:100vh;"
+            "display:grid;place-items:center;background:#20201f;font-family:Inter,'Avenir Next','Segoe UI',system-ui,sans-serif}"
+            "form{width:min(620px,calc(100% - 48px))}input{width:100%;height:48px;padding:0 20px;border:1px solid #4a4844;"
+            "border-radius:24px;outline:none;background:#2b2a29;color:#fff;font:16px Inter,'Avenir Next','Segoe UI',system-ui,sans-serif;"
+            "box-shadow:0 8px 24px #0004}input::placeholder{color:#aaa59c}input:focus{border-color:#ff8a62;"
+            "box-shadow:0 0 0 1px #ff8a62,0 8px 24px #0005}</style></head><body>"
+            "<form action='https://www.google.com/search' method=get><input name=q type=search autocomplete=off spellcheck=false "
+            "placeholder='Search' aria-label='Search'></form></body></html>",
             nullptr);
         if (tab->window->view == tab->view) {
             const char *shown = decision.uri == "vantage:new" ? "" : decision.uri.c_str();
@@ -236,7 +245,7 @@ void uri_changed(WebKitWebView *view, GParamSpec *, TabState *tab) {
 
 void title_changed(WebKitWebView *view, GParamSpec *, TabState *tab) {
     const char *title = webkit_web_view_get_title(view);
-    gtk_label_set_text(GTK_LABEL(tab->label), title && *title ? title : "New tab");
+    gtk_label_set_text(GTK_LABEL(tab->label), title && *title ? title : "New Tab");
     if (tab->window->view == view)
         gtk_window_set_title(GTK_WINDOW(tab->window->window), title && *title ? title : "Vantage Browser");
 }
@@ -303,9 +312,26 @@ void select_tab(TabState *tab) {
 
 void tab_selected(GtkButton *, TabState *tab) { select_tab(tab); }
 
+void rounded_rectangle(cairo_t *cr, double x, double y, double width, double height,
+                       double radius) {
+    cairo_new_sub_path(cr);
+    cairo_arc(cr, x + width - radius, y + radius, radius, -G_PI_2, 0);
+    cairo_arc(cr, x + width - radius, y + height - radius, radius, 0, G_PI_2);
+    cairo_arc(cr, x + radius, y + height - radius, radius, G_PI_2, G_PI);
+    cairo_arc(cr, x + radius, y + radius, radius, G_PI, G_PI + G_PI_2);
+    cairo_close_path(cr);
+}
+
 void draw_tab_backdrop(GtkDrawingArea *, cairo_t *cr, int width, int height, void *data) {
     auto *tab = static_cast<TabState *>(data);
-    if (tab->window->view != tab->view) return;
+    if (tab->window->view != tab->view) {
+        if (tab->hovered) {
+            rounded_rectangle(cr, 9, 7, width - 18, 24, 7);
+            cairo_set_source_rgb(cr, 0x35 / 255.0, 0x34 / 255.0, 0x32 / 255.0);
+            cairo_fill(cr);
+        }
+        return;
+    }
 
     const double edge = 9.0;
     const double inset = 9.0;
@@ -339,6 +365,16 @@ void draw_tab_backdrop(GtkDrawingArea *, cairo_t *cr, int width, int height, voi
     cairo_set_source_rgb(cr, 0x39 / 255.0, 0x39 / 255.0, 0x36 / 255.0);
     cairo_set_line_width(cr, 1);
     cairo_stroke(cr);
+}
+
+void tab_pointer_entered(GtkEventControllerMotion *, double, double, TabState *tab) {
+    tab->hovered = true;
+    gtk_widget_queue_draw(tab->backdrop);
+}
+
+void tab_pointer_left(GtkEventControllerMotion *, TabState *tab) {
+    tab->hovered = false;
+    gtk_widget_queue_draw(tab->backdrop);
 }
 
 void close_tab(TabState *tab) {
@@ -498,7 +534,7 @@ TabState *new_tab(WindowState *state, const std::string &uri) {
     gtk_widget_set_size_request(tab->spinner, 18, 18);
     gtk_stack_add_child(GTK_STACK(tab->icon_stack), tab->favicon);
     gtk_stack_add_child(GTK_STACK(tab->icon_stack), tab->spinner);
-    tab->label = gtk_label_new("New tab");
+    tab->label = gtk_label_new("New Tab");
     gtk_label_set_ellipsize(GTK_LABEL(tab->label), PANGO_ELLIPSIZE_END);
     gtk_label_set_max_width_chars(GTK_LABEL(tab->label), 24);
     gtk_box_append(GTK_BOX(tab_content), tab->icon_stack);
@@ -511,6 +547,11 @@ TabState *new_tab(WindowState *state, const std::string &uri) {
     gtk_box_append(GTK_BOX(tab->body), hover_surface);
     gtk_overlay_add_overlay(GTK_OVERLAY(tab->tab), tab->body);
     gtk_box_append(GTK_BOX(state->tab_box), tab->tab);
+
+    auto *tab_motion = gtk_event_controller_motion_new();
+    g_signal_connect(tab_motion, "enter", G_CALLBACK(tab_pointer_entered), tab);
+    g_signal_connect(tab_motion, "leave", G_CALLBACK(tab_pointer_left), tab);
+    gtk_widget_add_controller(tab->tab, tab_motion);
 
     g_signal_connect(select, "clicked", G_CALLBACK(tab_selected), tab);
     g_signal_connect(close, "clicked", G_CALLBACK(tab_closed), tab);
@@ -589,17 +630,17 @@ void install_style(GtkWidget *window) {
         ".browser-tab { min-width: 184px; margin-right: 0; background: transparent; }"
         ".browser-tab-body { background: transparent; }"
         ".tab-hover-surface { min-height: 24px; margin: 3px 9px 1px; border-radius: 7px; background: transparent; }"
-        ".browser-tab-body.inactive .tab-hover-surface:hover { background: #353432; }"
         ".browser-tab button { min-height: 22px; padding: 0 7px; border: 0; outline: none; background: transparent; box-shadow: none; color: #d8d4cc; }"
         ".browser-tab .tab-select { min-width: 112px; }"
         ".browser-tab .tab-close { min-width: 20px; padding: 0 4px; opacity: 0; }"
         ".browser-tab:hover .tab-close, .browser-tab-body.active .tab-close { opacity: 1; }"
         ".browser-tab button:hover { background: transparent; }"
         ".browser-tab .tab-close:hover { background: transparent; color: #ff7657; }"
-        ".new-tab { min-width: 28px; min-height: 28px; margin-left: 3px; }"
+        ".new-tab { min-width: 24px; min-height: 24px; margin-left: 3px; }"
         ".navigation { background: #2c2c2c; border-bottom: 1px solid #393936; }"
         ".toolbar { padding: 6px 8px; background: #2c2c2c; }"
-        ".toolbar button.flat, .new-tab.flat { min-width: 28px; min-height: 28px; padding: 2px; border: 0; border-radius: 7px; background: transparent; color: #d8d4cc; box-shadow: none; }"
+        ".toolbar button.flat { min-width: 28px; min-height: 28px; padding: 2px; border: 0; border-radius: 7px; background: transparent; color: #d8d4cc; box-shadow: none; }"
+        ".new-tab.flat { min-width: 24px; min-height: 24px; padding: 0; border: 0; border-radius: 7px; background: transparent; color: #d8d4cc; box-shadow: none; }"
         ".toolbar button.flat:hover, .new-tab.flat:hover { background: #3a3936; color: #fffaf0; }"
         ".toolbar button.flat:active, .new-tab.flat:active { background: #494741; }"
         ".toolbar .stop-icon { font-size: 27px; font-weight: 400; }"
