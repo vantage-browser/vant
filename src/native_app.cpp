@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cctype>
+#include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <iomanip>
@@ -158,7 +159,7 @@ void show_find(WindowState *state) {
 
 enum class ContextOpen { tab, window };
 struct ContextOpenData { WindowState *window{}; std::string uri; ContextOpen mode{}; bool image{}; };
-struct ImageDataAction { WindowState *window{}; std::string uri; bool save{}; };
+struct ImageAction { WindowState *window{}; std::string uri; bool save{}; };
 
 GBytes *decode_data_uri(const std::string &uri) {
     const auto comma = uri.find(',');
@@ -192,16 +193,21 @@ void image_save_chosen(GObject *source, GAsyncResult *result, void *data) {
     delete save;
 }
 
-void image_data_action(GSimpleAction *, GVariant *, void *data) {
-    const auto *action = static_cast<const ImageDataAction *>(data);
-    auto *bytes = decode_data_uri(action->uri);
+void use_image_bytes(WindowState *window, const std::string &uri, bool save_image, GBytes *bytes) {
     if (!bytes) return;
-    if (!action->save) {
+    if (!save_image) {
         GError *error = nullptr;
         auto *texture = gdk_texture_new_from_bytes(bytes, &error);
         if (texture) {
-            gdk_clipboard_set_texture(gtk_widget_get_clipboard(action->window->window), texture);
+            gdk_clipboard_set_texture(gtk_widget_get_clipboard(window->window), texture);
             g_object_unref(texture);
+        } else {
+            const auto semicolon = uri.find(';');
+            const std::string mime = uri.starts_with("data:") && semicolon != std::string::npos
+                ? uri.substr(5, semicolon - 5) : "image/png";
+            auto *provider = gdk_content_provider_new_for_bytes(mime.c_str(), bytes);
+            gdk_clipboard_set_content(gtk_widget_get_clipboard(window->window), provider);
+            g_object_unref(provider);
         }
         if (error) g_error_free(error);
         g_bytes_unref(bytes);
@@ -209,22 +215,59 @@ void image_data_action(GSimpleAction *, GVariant *, void *data) {
     }
     auto *dialog = gtk_file_dialog_new();
     gtk_file_dialog_set_title(dialog, "Save image as");
-    const auto semicolon = action->uri.find(';');
-    const auto mime = semicolon == std::string::npos ? std::string{} : action->uri.substr(11, semicolon - 11);
+    const auto semicolon = uri.find(';');
+    const auto mime = semicolon == std::string::npos ? std::string{} : uri.substr(11, semicolon - 11);
     const std::string extension = mime == "png" ? ".png" : mime == "webp" ? ".webp" :
         mime == "jpeg" ? ".jpg" : mime == "svg+xml" ? ".svg" : ".img";
-    gtk_file_dialog_set_initial_name(dialog, ("image" + extension).c_str());
+    std::string name = "image" + extension;
+    if (!uri.starts_with("data:")) {
+        auto source = uri.substr(0, uri.find_first_of("?#"));
+        const auto slash = source.find_last_of('/');
+        if (slash != std::string::npos && slash + 1 < source.size()) name = source.substr(slash + 1);
+    }
+    gtk_file_dialog_set_initial_name(dialog, name.c_str());
     auto *save = new SaveImageData{GTK_FILE_DIALOG(g_object_ref(dialog)), bytes};
-    gtk_file_dialog_save(dialog, GTK_WINDOW(action->window->window), nullptr, image_save_chosen, save);
+    gtk_file_dialog_save(dialog, GTK_WINDOW(window->window), nullptr, image_save_chosen, save);
     g_object_unref(dialog);
+}
+
+struct ImageFetch { WindowState *window{}; std::string uri; bool save{}; SoupSession *session{}; };
+
+void image_fetched(GObject *source, GAsyncResult *result, void *data) {
+    auto *fetch = static_cast<ImageFetch *>(data);
+    GError *error = nullptr;
+    auto *bytes = soup_session_send_and_read_finish(SOUP_SESSION(source), result, &error);
+    if (bytes) use_image_bytes(fetch->window, fetch->uri, fetch->save, bytes);
+    if (error) g_error_free(error);
+    g_object_unref(fetch->session);
+    delete fetch;
+}
+
+void image_action(GSimpleAction *, GVariant *, void *data) {
+    const auto *action = static_cast<const ImageAction *>(data);
+    if (action->uri.starts_with("data:image/")) {
+        auto *bytes = decode_data_uri(action->uri);
+        use_image_bytes(action->window, action->uri, action->save, bytes);
+        return;
+    }
+    auto *message = soup_message_new("GET", action->uri.c_str());
+    if (!message) return;
+    const char *page = action->window->view ? webkit_web_view_get_uri(action->window->view) : nullptr;
+    if (page) soup_message_headers_replace(soup_message_get_request_headers(message), "Referer", page);
+    auto *session = soup_session_new();
+    auto *fetch = new ImageFetch{action->window, action->uri, action->save,
+        SOUP_SESSION(g_object_ref(session))};
+    soup_session_send_and_read_async(session, message, G_PRIORITY_DEFAULT, nullptr, image_fetched, fetch);
+    g_object_unref(message);
+    g_object_unref(session);
 }
 
 void append_image_data_action(WebKitContextMenu *menu, WindowState *window, const char *uri,
                               const char *label, bool save) {
     auto *action = g_simple_action_new(save ? "save-data-image" : "copy-data-image", nullptr);
-    auto *data = new ImageDataAction{window, uri ? uri : "", save};
-    g_signal_connect_data(action, "activate", G_CALLBACK(image_data_action), data,
-        [](void *value, GClosure *) { delete static_cast<ImageDataAction *>(value); }, G_CONNECT_DEFAULT);
+    auto *data = new ImageAction{window, uri ? uri : "", save};
+    g_signal_connect_data(action, "activate", G_CALLBACK(image_action), data,
+        [](void *value, GClosure *) { delete static_cast<ImageAction *>(value); }, G_CONNECT_DEFAULT);
     webkit_context_menu_append(menu, webkit_context_menu_item_new_from_gaction(G_ACTION(action), label, nullptr));
     g_object_unref(action);
 }
@@ -240,7 +283,7 @@ void context_open(GSimpleAction *, GVariant *, void *data) {
             tab = find_tab(target, target->view);
         } else tab = new_tab(target, "vantage:new");
         if (tab) {
-            tab->internal_uri.clear();
+            tab->internal_uri = "vantage:image";
             const auto page = "<!doctype html><html><head><meta charset=utf-8><title>Image</title><style>"
                 "html{color-scheme:dark}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#20201f}"
                 "img{display:block;max-width:100%;max-height:100vh;object-fit:contain}</style></head><body><img src='" +
@@ -280,15 +323,8 @@ gboolean context_menu(WebKitWebView *, WebKitContextMenu *menu,
         const char *uri = webkit_hit_test_result_get_image_uri(hit);
         append_context_open(menu, tab->window, uri, "Open image in new tab", ContextOpen::tab, true);
         append_context_open(menu, tab->window, uri, "Open image in new window", ContextOpen::window, true);
-        if (uri && g_str_has_prefix(uri, "data:image/")) {
-            append_image_data_action(menu, tab->window, uri, "Save image as…", true);
-            append_image_data_action(menu, tab->window, uri, "Copy image", false);
-        } else {
-            webkit_context_menu_append(menu, webkit_context_menu_item_new_from_stock_action_with_label(
-                WEBKIT_CONTEXT_MENU_ACTION_DOWNLOAD_IMAGE_TO_DISK, "Save image as…"));
-            webkit_context_menu_append(menu, webkit_context_menu_item_new_from_stock_action(
-                WEBKIT_CONTEXT_MENU_ACTION_COPY_IMAGE_TO_CLIPBOARD));
-        }
+        append_image_data_action(menu, tab->window, uri, "Save image as…", true);
+        append_image_data_action(menu, tab->window, uri, "Copy image", false);
         webkit_context_menu_append(menu, webkit_context_menu_item_new_from_stock_action(
             WEBKIT_CONTEXT_MENU_ACTION_COPY_IMAGE_URL_TO_CLIPBOARD));
     }
@@ -670,13 +706,14 @@ gboolean decide_policy(WebKitWebView *, WebKitPolicyDecision *decision,
     const char *uri = webkit_uri_request_get_uri(request);
     if (!tab->internal_uri.empty() && uri && std::string_view(uri) == "about:blank") return FALSE;
     const std::string_view target = uri ? uri : "";
-    if (type == WEBKIT_POLICY_DECISION_TYPE_NEW_WINDOW_ACTION && !target.starts_with("vantage:")) {
+    if (type == WEBKIT_POLICY_DECISION_TYPE_NEW_WINDOW_ACTION) {
+        webkit_policy_decision_ignore(decision);
         const auto resolved_window = tab->window->policy.resolve(target);
-        if (resolved_window.kind == vantage::NavigationKind::web) {
-            webkit_policy_decision_ignore(decision);
+        if (resolved_window.kind == vantage::NavigationKind::web)
             new_tab(tab->window, resolved_window.uri);
-            return TRUE;
-        }
+        else
+            new_tab(tab->window, "vantage:new");
+        return TRUE;
     }
     if (webkit_navigation_action_get_mouse_button(action) == GDK_BUTTON_MIDDLE &&
         !target.starts_with("vantage:")) {
@@ -729,12 +766,12 @@ gboolean decide_policy(WebKitWebView *, WebKitPolicyDecision *decision,
                     gdk_clipboard_set_text(clipboard, found->uri.c_str());
                 } else if (target.starts_with("vantage:download-show")) {
                     if (!found->destination.empty()) {
-                        auto *file = g_file_new_for_path(found->destination.c_str());
-                        auto *launcher = gtk_file_launcher_new(file);
-                        gtk_file_launcher_open_containing_folder(launcher, GTK_WINDOW(tab->window->window),
-                            nullptr, nullptr, nullptr);
-                        g_object_unref(launcher);
-                        g_object_unref(file);
+                        const auto folder = std::filesystem::path(found->destination).parent_path();
+                        auto *folder_uri = g_filename_to_uri(folder.c_str(), nullptr, nullptr);
+                        if (folder_uri) {
+                            g_app_info_launch_default_for_uri(folder_uri, nullptr, nullptr);
+                            g_free(folder_uri);
+                        }
                     }
                 }
             }
@@ -1369,11 +1406,20 @@ void draw_toolbar_icon(GtkDrawingArea *, cairo_t *cr, int width, int height, voi
         cairo_stroke(cr);
         return;
     }
-    cairo_arc(cr, cx, cy, 6.0, -0.65, 4.65);
+    constexpr double end_angle = 4.65;
+    cairo_arc(cr, cx, cy, 6.0, -0.65, end_angle);
     cairo_stroke(cr);
-    cairo_move_to(cr, cx - 1.0, cy - 6.1);
-    cairo_line_to(cr, cx - 5.2, cy - 6.0);
-    cairo_line_to(cr, cx - 4.2, cy - 2.0);
+    const double tip_x = cx + 6.0 * std::cos(end_angle);
+    const double tip_y = cy + 6.0 * std::sin(end_angle);
+    const double tangent_x = -std::sin(end_angle);
+    const double tangent_y = std::cos(end_angle);
+    const double base_x = tip_x - 4.0 * tangent_x;
+    const double base_y = tip_y - 4.0 * tangent_y;
+    const double normal_x = -tangent_y;
+    const double normal_y = tangent_x;
+    cairo_move_to(cr, base_x + 2.0 * normal_x, base_y + 2.0 * normal_y);
+    cairo_line_to(cr, tip_x, tip_y);
+    cairo_line_to(cr, base_x - 2.0 * normal_x, base_y - 2.0 * normal_y);
     cairo_stroke(cr);
 }
 
@@ -1417,6 +1463,12 @@ TabState *new_tab(WindowState *state, const std::string &uri) {
     tab->view = state->private_session
         ? WEBKIT_WEB_VIEW(g_object_new(WEBKIT_TYPE_WEB_VIEW, "network-session", state->private_session, nullptr))
         : WEBKIT_WEB_VIEW(webkit_web_view_new());
+    auto *find_style = webkit_user_style_sheet_new(
+        "::search-text{background:transparent!important;color:#ffd37a!important;text-decoration:underline;text-decoration-color:#ffd37a}"
+        "::search-text:current{background:transparent!important;color:#ff8a62!important;text-decoration-color:#ff8a62}",
+        WEBKIT_USER_CONTENT_INJECT_ALL_FRAMES, WEBKIT_USER_STYLE_LEVEL_USER, nullptr, nullptr);
+    webkit_user_content_manager_add_style_sheet(webkit_web_view_get_user_content_manager(tab->view), find_style);
+    webkit_user_style_sheet_unref(find_style);
     tab->page = GTK_WIDGET(tab->view);
     gtk_widget_set_vexpand(tab->page, TRUE);
     gtk_stack_add_child(GTK_STACK(state->stack), tab->page);
@@ -1625,8 +1677,8 @@ void install_style(GtkWidget *window) {
         ".downloads-popover .download-cancel:hover { color: #ff8a62; }"
         ".browser-tab spinner { color: #ff8a62; }"
         ".load-progress { min-width: 0; min-height: 2px; background: transparent; }"
-        ".find-bar { padding: 6px 10px; background: #20201f; border-bottom: 1px solid #393936; }"
-        ".find-bar entry { min-width: 260px; min-height: 30px; padding: 0 11px; border: 1px solid #4a4844; border-radius: 7px; background: #2b2a29; color: #fff; box-shadow: none; }"
+        ".find-bar { padding: 6px; border: 1px solid #4a4844; border-radius: 9px; background: #2b2a29; box-shadow: 0 7px 20px #0009; }"
+        ".find-bar entry { min-width: 240px; min-height: 30px; padding: 0 9px; border: 0; border-radius: 6px; background: #222120; color: #fff; box-shadow: none; }"
         ".find-bar entry:focus { border-color: #ff8a62; }.find-bar label { color: #aaa59c; min-width: 54px; }"
         ".find-bar button { min-width: 28px; min-height: 28px; padding: 2px; border: 0; border-radius: 6px; background: transparent; color: #d8d4cc; box-shadow: none; }"
         ".find-bar button:hover { background: #3a3936; color: #ff8a62; }"
@@ -1785,15 +1837,15 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
 
     state->find_bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
     gtk_widget_add_css_class(state->find_bar, "find-bar");
-    gtk_widget_set_halign(state->find_bar, GTK_ALIGN_FILL);
-    auto *find_spacer = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
-    gtk_widget_set_hexpand(find_spacer, TRUE);
-    gtk_box_append(GTK_BOX(state->find_bar), find_spacer);
+    gtk_widget_set_halign(state->find_bar, GTK_ALIGN_END);
+    gtk_widget_set_valign(state->find_bar, GTK_ALIGN_START);
+    gtk_widget_set_margin_top(state->find_bar, 10);
+    gtk_widget_set_margin_end(state->find_bar, 10);
     state->find_entry = gtk_entry_new();
     gtk_entry_set_placeholder_text(GTK_ENTRY(state->find_entry), "Find in page");
     state->find_count = gtk_label_new("0 / 0");
-    auto *find_up = gtk_button_new_from_icon_name("go-up-symbolic");
-    auto *find_down = gtk_button_new_from_icon_name("go-down-symbolic");
+    auto *find_up = gtk_button_new_from_icon_name("pan-up-symbolic");
+    auto *find_down = gtk_button_new_from_icon_name("pan-down-symbolic");
     auto *find_close = gtk_button_new_from_icon_name("window-close-symbolic");
     gtk_widget_set_tooltip_text(find_up, "Previous match");
     gtk_widget_set_tooltip_text(find_down, "Next match");
@@ -1807,9 +1859,12 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
 
     state->stack = gtk_stack_new();
     gtk_widget_set_vexpand(state->stack, TRUE);
+    auto *page_overlay = gtk_overlay_new();
+    gtk_widget_set_vexpand(page_overlay, TRUE);
+    gtk_overlay_set_child(GTK_OVERLAY(page_overlay), state->stack);
+    gtk_overlay_add_overlay(GTK_OVERLAY(page_overlay), state->find_bar);
     gtk_box_append(GTK_BOX(layout), navigation);
-    gtk_box_append(GTK_BOX(layout), state->find_bar);
-    gtk_box_append(GTK_BOX(layout), state->stack);
+    gtk_box_append(GTK_BOX(layout), page_overlay);
     gtk_window_set_child(GTK_WINDOW(state->window), layout);
     install_style(state->window);
 
