@@ -45,11 +45,13 @@ struct WindowState {
     GtkWidget *progress{};
     GtkWidget *tab_box{};
     GtkWidget *stack{};
+    GtkWidget *new_tab_backdrop{};
     WebKitWebView *view{};
     TabState *middle_pressed_tab{};
     std::vector<std::unique_ptr<TabState>> tabs;
     vantage::NavigationPolicy policy;
     bool smoke{};
+    bool new_tab_hovered{};
 };
 
 struct ApplicationState {
@@ -377,6 +379,24 @@ void tab_pointer_left(GtkEventControllerMotion *, TabState *tab) {
     gtk_widget_queue_draw(tab->backdrop);
 }
 
+void draw_new_tab_backdrop(GtkDrawingArea *, cairo_t *cr, int width, int height, void *data) {
+    auto *state = static_cast<WindowState *>(data);
+    if (!state->new_tab_hovered) return;
+    rounded_rectangle(cr, 0, 0, width, height, 7);
+    cairo_set_source_rgb(cr, 0x3a / 255.0, 0x39 / 255.0, 0x36 / 255.0);
+    cairo_fill(cr);
+}
+
+void new_tab_pointer_entered(GtkEventControllerMotion *, double, double, WindowState *state) {
+    state->new_tab_hovered = true;
+    gtk_widget_queue_draw(state->new_tab_backdrop);
+}
+
+void new_tab_pointer_left(GtkEventControllerMotion *, WindowState *state) {
+    state->new_tab_hovered = false;
+    gtk_widget_queue_draw(state->new_tab_backdrop);
+}
+
 void close_tab(TabState *tab) {
     auto *state = tab->window;
     const auto found = std::find_if(state->tabs.begin(), state->tabs.end(),
@@ -636,13 +656,13 @@ void install_style(GtkWidget *window) {
         ".browser-tab:hover .tab-close, .browser-tab-body.active .tab-close { opacity: 1; }"
         ".browser-tab button:hover { background: transparent; }"
         ".browser-tab .tab-close:hover { background: transparent; color: #ff7657; }"
-        ".new-tab { min-width: 24px; min-height: 24px; margin-left: 3px; }"
+        ".new-tab { min-width: 28px; min-height: 28px; margin-left: 3px; }"
         ".navigation { background: #2c2c2c; border-bottom: 1px solid #393936; }"
         ".toolbar { padding: 6px 8px; background: #2c2c2c; }"
-        ".toolbar button.flat { min-width: 28px; min-height: 28px; padding: 2px; border: 0; border-radius: 7px; background: transparent; color: #d8d4cc; box-shadow: none; }"
-        ".new-tab.flat { min-width: 24px; min-height: 24px; padding: 0; border: 0; border-radius: 7px; background: transparent; color: #d8d4cc; box-shadow: none; }"
-        ".toolbar button.flat:hover, .new-tab.flat:hover { background: #3a3936; color: #fffaf0; }"
-        ".toolbar button.flat:active, .new-tab.flat:active { background: #494741; }"
+        ".toolbar button.flat, .new-tab.flat { min-width: 28px; min-height: 28px; padding: 2px; border: 0; border-radius: 7px; background: transparent; color: #d8d4cc; box-shadow: none; }"
+        ".toolbar button.flat:hover { background: #3a3936; color: #fffaf0; }"
+        ".toolbar button.flat:active { background: #494741; }"
+        ".new-tab.flat:hover, .new-tab.flat:active { background: transparent; color: #fffaf0; }"
         ".toolbar .stop-icon { font-size: 27px; font-weight: 400; }"
         ".toolbar entry { min-height: 30px; padding: 0 12px; border-radius: 8px; border: 1px solid #45433f; background: #191918; color: #f1ede3; box-shadow: none; }"
         ".toolbar entry:focus { border-color: #ff8a62; box-shadow: 0 0 0 1px #ff8a62; }"
@@ -676,8 +696,25 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     auto *tab_strip = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
     gtk_widget_add_css_class(tab_strip, "tab-strip");
     state->tab_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
-    auto *new_button = icon_button("list-add-symbolic", "New tab");
+    auto *new_button = gtk_button_new();
+    gtk_widget_add_css_class(new_button, "flat");
+    gtk_widget_set_tooltip_text(new_button, "New tab");
     gtk_widget_add_css_class(new_button, "new-tab");
+    auto *new_tab_content = gtk_overlay_new();
+    state->new_tab_backdrop = gtk_drawing_area_new();
+    gtk_widget_set_size_request(state->new_tab_backdrop, 24, 24);
+    gtk_widget_set_can_target(state->new_tab_backdrop, FALSE);
+    gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(state->new_tab_backdrop),
+        draw_new_tab_backdrop, state, nullptr);
+    gtk_overlay_set_child(GTK_OVERLAY(new_tab_content), state->new_tab_backdrop);
+    auto *new_tab_icon = gtk_image_new_from_icon_name("list-add-symbolic");
+    gtk_widget_set_can_target(new_tab_icon, FALSE);
+    gtk_overlay_add_overlay(GTK_OVERLAY(new_tab_content), new_tab_icon);
+    gtk_button_set_child(GTK_BUTTON(new_button), new_tab_content);
+    auto *new_tab_motion = gtk_event_controller_motion_new();
+    g_signal_connect(new_tab_motion, "enter", G_CALLBACK(new_tab_pointer_entered), state);
+    g_signal_connect(new_tab_motion, "leave", G_CALLBACK(new_tab_pointer_left), state);
+    gtk_widget_add_controller(new_button, new_tab_motion);
     gtk_box_append(GTK_BOX(tab_strip), state->tab_box);
     gtk_box_append(GTK_BOX(tab_strip), new_button);
     gtk_widget_set_hexpand(tab_strip, TRUE);
