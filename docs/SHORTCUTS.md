@@ -3,6 +3,7 @@
 | Shortcut | Command |
 |---|---|
 | `Ctrl+N` | New window |
+| `Ctrl+Shift+N` | New private window |
 | `Ctrl+T` | New tab |
 | `Ctrl+W` | Close active tab |
 | `Ctrl+Shift+T` | Reopen most recently closed tab |
@@ -11,9 +12,15 @@
 | `Ctrl+R` | Reload |
 | `Escape` | Stop loading or close transient chrome |
 | `Ctrl+F` | Find in page |
+| `Ctrl+H` | Open history |
+| `Ctrl+J` | Open downloads |
+| `Ctrl+D` | Add or remove the active page bookmark |
+| `Ctrl+Shift+Delete` | Delete browsing history |
+| `Ctrl+P` | Print the active page |
 
-`Ctrl+N`, `Ctrl+T`, `Ctrl+W`, `Ctrl+L`, `Ctrl+R`, `F5`, `Alt+Left`, `Alt+Right` and
-`Escape` are connected to the native GTK shell. Reopen-tab, command-palette and
-find defaults will be connected as their native surfaces land. Focus traversal
+`Ctrl+N`, `Ctrl+Shift+N`, `Ctrl+T`, `Ctrl+W`, `Ctrl+L`, `Ctrl+R`, `Ctrl+H`,
+`Ctrl+J`, `Ctrl+D`, `Ctrl+Shift+Delete`, `Ctrl+P`, `F5`, `Alt+Left`, `Alt+Right`
+and `Escape` are connected to the native GTK shell. Reopen-tab, command-palette
+and find defaults will be connected as their native surfaces land. Focus traversal
 and screen-reader verification remain part of the target-platform acceptance
 pass.

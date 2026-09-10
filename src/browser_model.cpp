@@ -95,6 +95,8 @@ bool BrowserModel::move_tab(TabId id, std::size_t destination) {
 
 std::optional<Command> command_for_shortcut(std::string_view shortcut) {
     if (shortcut == "Ctrl+T") return Command::new_tab;
+    if (shortcut == "Ctrl+N") return Command::new_window;
+    if (shortcut == "Ctrl+Shift+N") return Command::new_private_window;
     if (shortcut == "Ctrl+W") return Command::close_tab;
     if (shortcut == "Ctrl+Shift+T") return Command::reopen_tab;
     if (shortcut == "Ctrl+L") return Command::focus_address;
@@ -102,6 +104,11 @@ std::optional<Command> command_for_shortcut(std::string_view shortcut) {
     if (shortcut == "Ctrl+R") return Command::reload;
     if (shortcut == "Escape") return Command::stop;
     if (shortcut == "Ctrl+F") return Command::find;
+    if (shortcut == "Ctrl+H") return Command::history;
+    if (shortcut == "Ctrl+J") return Command::downloads;
+    if (shortcut == "Ctrl+D") return Command::bookmark;
+    if (shortcut == "Ctrl+Shift+Delete") return Command::delete_history;
+    if (shortcut == "Ctrl+P") return Command::print;
     return std::nullopt;
 }
 

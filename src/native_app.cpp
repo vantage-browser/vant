@@ -869,6 +869,11 @@ gboolean key_pressed(GtkEventControllerKey *, guint keyval, guint,
         toggle_bookmark(nullptr, state);
         return TRUE;
     }
+    if (control && (modifiers & GDK_SHIFT_MASK) != 0 && keyval == GDK_KEY_Delete) {
+        state->owner->data->clear_history();
+        open_internal(state, "vantage:history");
+        return TRUE;
+    }
     if (control && (keyval == GDK_KEY_p || keyval == GDK_KEY_P)) {
         print_page(nullptr, state);
         return TRUE;
