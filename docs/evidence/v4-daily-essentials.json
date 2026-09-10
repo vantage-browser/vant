@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "checkpoint": "V4",
+  "status": "accepted-core",
+  "verified": ["durable bookmark upsert/remove", "per-origin permission default/allow/deny storage", "private in-memory user data", "download filename traversal containment", "find/zoom command identities", "ASan/UBSan"],
+  "pending": ["native bookmark/download/find/zoom UI", "desktop portal chooser", "secret-store consumer", "import/export fixtures"]
+}
