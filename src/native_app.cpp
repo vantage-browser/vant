@@ -53,9 +53,11 @@ gboolean decide_policy(WebKitWebView *, WebKitPolicyDecision *decision,
     auto *request = webkit_navigation_action_get_request(action);
     const char *uri = webkit_uri_request_get_uri(request);
     const auto resolved = state->policy.resolve(uri ? uri : "");
-    if (resolved.kind == vantage::NavigationKind::web || resolved.kind == vantage::NavigationKind::internal)
+    if (resolved.kind == vantage::NavigationKind::web)
         return FALSE;
     webkit_policy_decision_ignore(decision);
+    if (resolved.kind == vantage::NavigationKind::internal)
+        load_decision(state, resolved);
     return TRUE;
 }
 

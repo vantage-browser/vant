@@ -54,13 +54,20 @@ $(BUILD)/test_user_data: tests/user_data.cpp $(CORE_OBJECTS)
 $(BUILD)/test_jspp_adapter: tests/jspp_adapter.cpp $(BUILD)/jspp_adapter.o $(JSPP_OBJECTS)
 	$(CXX) $(CPPFLAGS) -I$(JSPP_DIR)/include $(CXXFLAGS) $^ -pthread -o $@
 
-test-unit: $(BUILD)/test_application $(BUILD)/test_navigation $(BUILD)/test_browser_model $(BUILD)/test_session_store $(BUILD)/test_user_data $(BUILD)/test_jspp_adapter
+$(BUILD)/automation.o: src/automation.cpp src/automation.h | $(BUILD)
+	$(CXX) $(CPPFLAGS) -I$(JSPP_DIR)/include $(CXXFLAGS) -c $< -o $@
+
+$(BUILD)/test_automation: tests/automation.cpp $(BUILD)/automation.o $(CORE_OBJECTS) $(JSPP_OBJECTS)
+	$(CXX) $(CPPFLAGS) -I$(JSPP_DIR)/include $(CXXFLAGS) $^ $(SQLITE_LIBS) -pthread -o $@
+
+test-unit: $(BUILD)/test_application $(BUILD)/test_navigation $(BUILD)/test_browser_model $(BUILD)/test_session_store $(BUILD)/test_user_data $(BUILD)/test_jspp_adapter $(BUILD)/test_automation
 	./$(BUILD)/test_application
 	./$(BUILD)/test_navigation
 	./$(BUILD)/test_browser_model
 	./$(BUILD)/test_session_store
 	./$(BUILD)/test_user_data
 	./$(BUILD)/test_jspp_adapter
+	./$(BUILD)/test_automation
 
 smoke: $(BUILD)/vant
 	./$(BUILD)/vant --headless-smoke
@@ -85,6 +92,8 @@ test-sanitize:
 	ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 ./$(BUILD)/san/test_user_data
 	$(CXX) $(CPPFLAGS) -I$(JSPP_DIR)/include -I$(JSPP_DIR)/src -std=c++20 -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -Wall -Wextra -Wpedantic -Werror tests/jspp_adapter.cpp src/jspp_adapter.cpp $(JSPP_SOURCES) -pthread -o $(BUILD)/san/test_jspp_adapter
 	ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 ./$(BUILD)/san/test_jspp_adapter
+	$(CXX) $(CPPFLAGS) -I$(JSPP_DIR)/include -I$(JSPP_DIR)/src -std=c++20 -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -Wall -Wextra -Wpedantic -Werror tests/automation.cpp src/automation.cpp $(CORE_SOURCES) $(JSPP_SOURCES) $(SQLITE_LIBS) -pthread -o $(BUILD)/san/test_automation
+	ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 ./$(BUILD)/san/test_automation
 
 vendor-check:
 	python3 tools/vendor_jspp.py --check

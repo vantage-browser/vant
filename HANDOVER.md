@@ -101,6 +101,15 @@ versions, migrations, corruption handling and bounded retention.
 Checkpoints are sequential acceptance gates. A later checkpoint may be refined
 from earlier evidence, but it must not erase a failed or unsupported result.
 
+Current local baseline (2026-09-10): V0-V1 have accepted managed-Linux build
+evidence, V2-V5 and V7 have accepted independently testable core evidence, and
+V6 is accepted with a deterministic JS++ snapshot. The native executable links
+GTK 4.14.5 and WebKitGTK 2.52.3 and the runtime probe passes. This container
+forbids the display socket required by Xvfb, so real WebKit navigation, native
+tab binding and Wayland/Omarchy interaction evidence remain pending. Do not
+collapse these bounded results into a claim that V0-V7 are target-platform
+complete or that Vantage is ready for daily use.
+
 ### V0 - architecture and reproducible shell
 
 - Freeze supported Linux distribution/compiler/WebKitGTK versions.
@@ -279,4 +288,3 @@ rehearsed. A failed gate stops the release; do not weaken or silently skip it.
 - Treat generated files, caches, profiles, downloads and benchmark output as
   disposable unless a documented evidence path explicitly retains them.
 - Consolidate durable decisions here instead of appending an unstructured diary.
-
