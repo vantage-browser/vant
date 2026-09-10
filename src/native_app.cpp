@@ -83,7 +83,6 @@ struct WindowState {
     unsigned find_current{};
     unsigned find_total{};
     unsigned find_generation{};
-    bool address_was_focused_on_press{};
     bool custom_find{};
     ~WindowState() { if (private_session) g_object_unref(private_session); }
 };
@@ -99,7 +98,7 @@ struct ApplicationState {
 
 void sync_active_chrome(WindowState *state);
 TabState *find_tab(WindowState *state, WebKitWebView *view);
-TabState *new_tab(WindowState *state, const std::string &uri);
+TabState *new_tab(WindowState *state, const std::string &uri, bool load_initial = true);
 void create_window(ApplicationState *owner, const std::string &initial_uri, bool smoke,
                    WindowState *source, bool private_mode = false);
 std::string format_bytes(std::uint64_t bytes);
@@ -452,7 +451,7 @@ void page_action(GSimpleAction *, GVariant *, void *data) {
         const char *uri = webkit_web_view_get_uri(action->tab->view);
         auto *resource = webkit_web_view_get_main_resource(action->tab->view);
         if (!resource || !uri) return;
-        auto *target = new_tab(action->tab->window, "vantage:new");
+        auto *target = new_tab(action->tab->window, "vantage:new", false);
         target->internal_uri = "vantage:source";
         target->display_uri = "view-source:" + std::string(uri);
         webkit_web_view_load_html(target->view,
@@ -1203,7 +1202,7 @@ void close_tab(TabState *tab) {
     gtk_stack_remove(GTK_STACK(state->stack), tab->page);
     state->tabs.erase(found);
     if (state->tabs.empty()) {
-        new_tab(state, "vantage:new");
+        gtk_window_close(GTK_WINDOW(state->window));
     } else if (was_active) {
         select_tab(state->tabs[std::min(index, state->tabs.size() - 1)].get());
     }
@@ -1760,18 +1759,10 @@ gboolean select_address_deferred(void *data) {
 }
 
 void address_focus_changed(GtkWidget *widget, GParamSpec *, WindowState *state) {
-    if (gtk_widget_has_focus(widget)) g_idle_add(select_address_deferred, state);
+    if (gtk_widget_has_focus(widget)) g_timeout_add(20, select_address_deferred, state);
 }
 
-void address_pressed(GtkGestureClick *, int, double, double, WindowState *state) {
-    state->address_was_focused_on_press = gtk_widget_has_focus(state->address);
-}
-
-void address_released(GtkGestureClick *, int, double, double, WindowState *state) {
-    if (!state->address_was_focused_on_press) g_idle_add(select_address_deferred, state);
-}
-
-TabState *new_tab(WindowState *state, const std::string &uri) {
+TabState *new_tab(WindowState *state, const std::string &uri, bool load_initial) {
     auto owned = std::make_unique<TabState>();
     auto *tab = owned.get();
     tab->window = state;
@@ -1860,8 +1851,10 @@ TabState *new_tab(WindowState *state, const std::string &uri) {
     auto *session = webkit_web_view_get_network_session(tab->view);
     auto *data_manager = webkit_network_session_get_website_data_manager(session);
     webkit_website_data_manager_set_favicons_enabled(data_manager, TRUE);
-    load_decision(tab, state->policy.resolve(uri));
-    if (uri == "vantage:new" || uri.starts_with("about:")) g_idle_add(focus_address_deferred, state);
+    if (load_initial) {
+        load_decision(tab, state->policy.resolve(uri));
+        if (uri == "vantage:new" || uri.starts_with("about:")) g_idle_add(focus_address_deferred, state);
+    }
     return tab;
 }
 
@@ -2102,7 +2095,9 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     gtk_popover_set_autohide(GTK_POPOVER(state->address_popover), TRUE);
     state->address_suggestions = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
     gtk_popover_set_child(GTK_POPOVER(state->address_popover), state->address_suggestions);
-    gtk_widget_set_parent(state->address_popover, address_wrap);
+    gtk_widget_set_halign(state->address_popover, GTK_ALIGN_FILL);
+    gtk_widget_set_valign(state->address_popover, GTK_ALIGN_END);
+    gtk_overlay_add_overlay(GTK_OVERLAY(address_wrap), state->address_popover);
     state->bookmark_button = icon_button("non-starred-symbolic", "Bookmark this tab");
     gtk_widget_add_css_class(state->bookmark_button, "address-bookmark");
     gtk_widget_set_halign(state->bookmark_button, GTK_ALIGN_END);
@@ -2195,11 +2190,6 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     auto *address_keys = gtk_event_controller_key_new();
     g_signal_connect(address_keys, "key-pressed", G_CALLBACK(address_key_pressed), state);
     gtk_widget_add_controller(state->address, address_keys);
-    auto *address_click = gtk_gesture_click_new();
-    gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(address_click), GTK_PHASE_CAPTURE);
-    g_signal_connect(address_click, "pressed", G_CALLBACK(address_pressed), state);
-    g_signal_connect(address_click, "released", G_CALLBACK(address_released), state);
-    gtk_widget_add_controller(state->address, GTK_EVENT_CONTROLLER(address_click));
     g_signal_connect(state->bookmark_button, "clicked", G_CALLBACK(toggle_bookmark), state);
     g_signal_connect(state->find_entry, "changed", G_CALLBACK(find_changed), state);
     g_signal_connect(state->find_entry, "activate", G_CALLBACK(find_activate), state);
