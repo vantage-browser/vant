@@ -24,7 +24,7 @@ void load_decision(WindowState *state, const vantage::NavigationDecision &decisi
         webkit_web_view_load_uri(state->view, decision.uri.c_str());
     } else if (decision.kind == vantage::NavigationKind::internal) {
         webkit_web_view_load_html(state->view,
-            "<!doctype html><meta charset=utf-8><style>html{color-scheme:dark}body{margin:0;background:#11100f;color:#f1ede3;font:18px system-ui;display:grid;place-items:center;height:100vh}main{text-align:center}b{color:#ff725e;font-size:42px}</style><main><b>Vantage</b><p>A clearer point of view on the web.</p></main>",
+            "<!doctype html><meta charset=utf-8><title>Vantage Browser</title><style>html{color-scheme:dark}body{margin:0;background:#11100f;color:#f1ede3;font:18px system-ui;display:grid;place-items:center;height:100vh}main{text-align:center}b{color:#ff725e;font-size:42px}</style><main><b>Vantage</b><p>A clearer point of view on the web.</p></main>",
             nullptr);
         gtk_editable_set_text(GTK_EDITABLE(state->address), decision.uri.c_str());
     }
@@ -43,6 +43,11 @@ void stop(GtkButton *, WindowState *state) { webkit_web_view_stop_loading(state-
 void uri_changed(WebKitWebView *view, GParamSpec *, WindowState *state) {
     const char *uri = webkit_web_view_get_uri(view);
     if (uri) gtk_editable_set_text(GTK_EDITABLE(state->address), uri);
+}
+
+void title_changed(WebKitWebView *view, GParamSpec *, WindowState *state) {
+    const char *title = webkit_web_view_get_title(view);
+    gtk_window_set_title(GTK_WINDOW(state->window), title && *title ? title : "Vantage Browser");
 }
 
 gboolean decide_policy(WebKitWebView *, WebKitPolicyDecision *decision,
@@ -110,6 +115,7 @@ void activate(GtkApplication *application, void *user_data) {
     g_signal_connect(stop_button, "clicked", G_CALLBACK(stop), state);
     g_signal_connect(state->address, "activate", G_CALLBACK(submit_address), state);
     g_signal_connect(state->view, "notify::uri", G_CALLBACK(uri_changed), state);
+    g_signal_connect(state->view, "notify::title", G_CALLBACK(title_changed), state);
     g_signal_connect(state->view, "decide-policy", G_CALLBACK(decide_policy), state);
     g_signal_connect(state->view, "load-failed-with-tls-errors", G_CALLBACK(tls_failed), state);
 
