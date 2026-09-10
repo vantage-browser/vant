@@ -261,6 +261,29 @@ gboolean tls_failed(WebKitWebView *, const char *, GTlsCertificate *, GTlsCertif
     return FALSE;
 }
 
+gboolean load_failed(WebKitWebView *view, WebKitLoadEvent, const char *failing_uri,
+                     GError *error, TabState *) {
+    if (g_error_matches(error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) return FALSE;
+    auto *escaped_uri = g_markup_escape_text(failing_uri ? failing_uri : "Unknown address", -1);
+    auto *escaped_message = g_markup_escape_text(error && error->message ? error->message : "Unknown error", -1);
+    const std::string page =
+        "<!doctype html><html><head><meta charset=utf-8><title>Page unavailable</title>"
+        "<style>html{color-scheme:dark}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;"
+        "background:#11100f;color:#e8e3d9;font:16px system-ui,sans-serif}main{width:min(680px,calc(100% - 48px));padding:42px;"
+        "background:#1b1a19;border:1px solid #393632;border-radius:14px}small{color:#ff8a62;font:700 12px ui-monospace,monospace;"
+        "letter-spacing:.14em;text-transform:uppercase}h1{margin:12px 0 10px;font-size:38px;line-height:1.05}p{color:#aaa49a}"
+        "pre{overflow:auto;margin:24px 0 0;padding:18px;background:#0c0c0b;border-left:3px solid #ff7657;color:#d8d4cc;"
+        "font:14px/1.6 ui-monospace,monospace;white-space:pre-wrap}.key{color:#79d8b0}.value{color:#ffd37a}</style></head>"
+        "<body><main><small>Navigation error</small><h1>This page is unavailable.</h1>"
+        "<p>Vantage could not finish loading the requested address.</p><pre><span class=key>url</span>     <span class=value>" +
+        std::string(escaped_uri) + "</span>\n<span class=key>error</span>   " + std::string(escaped_message) +
+        "</pre></main></body></html>";
+    g_free(escaped_uri);
+    g_free(escaped_message);
+    webkit_web_view_load_alternate_html(view, page.c_str(), failing_uri, failing_uri);
+    return TRUE;
+}
+
 void select_tab(TabState *tab) {
     auto *state = tab->window;
     state->view = tab->view;
@@ -285,34 +308,34 @@ void draw_tab_backdrop(GtkDrawingArea *, cairo_t *cr, int width, int height, voi
     if (tab->window->view != tab->view) return;
 
     const double edge = 9.0;
-    const double inset = 3.0;
+    const double inset = 9.0;
     const double left = inset;
     const double right = width - inset;
-    const double top = 8.0;
+    const double top = 7.0;
     const double radius = 8.0;
     cairo_new_path(cr);
-    cairo_move_to(cr, left, height);
-    cairo_curve_to(cr, left + edge * 0.55, height, left, height - edge * 0.45, left, height - edge);
+    cairo_move_to(cr, 0, height);
+    cairo_curve_to(cr, edge * 0.55, height, left, height - edge * 0.45, left, height - edge);
     cairo_line_to(cr, left, top + radius);
     cairo_curve_to(cr, left, top + 3, left + 3, top, left + radius, top);
     cairo_line_to(cr, right - radius, top);
     cairo_curve_to(cr, right - 3, top, right, top + 3, right, top + radius);
     cairo_line_to(cr, right, height - edge);
-    cairo_curve_to(cr, right, height - edge * 0.45, right - edge * 0.55, height, right, height);
-    cairo_line_to(cr, left, height);
+    cairo_curve_to(cr, right, height - edge * 0.45, width - edge * 0.55, height, width, height);
+    cairo_line_to(cr, 0, height);
     cairo_close_path(cr);
     cairo_set_source_rgb(cr, 0x2c / 255.0, 0x2c / 255.0, 0x2c / 255.0);
     cairo_fill(cr);
 
     cairo_new_path(cr);
-    cairo_move_to(cr, left + 0.5, height - 0.5);
-    cairo_curve_to(cr, left + edge * 0.55, height - 0.5, left + 0.5, height - edge * 0.45, left + 0.5, height - edge);
+    cairo_move_to(cr, 0.5, height - 0.5);
+    cairo_curve_to(cr, edge * 0.55, height - 0.5, left + 0.5, height - edge * 0.45, left + 0.5, height - edge);
     cairo_line_to(cr, left + 0.5, top + radius);
     cairo_curve_to(cr, left + 0.5, top + 3, left + 3, top + 0.5, left + radius, top + 0.5);
     cairo_line_to(cr, right - radius, top + 0.5);
     cairo_curve_to(cr, right - 3, top + 0.5, right - 0.5, top + 3, right - 0.5, top + radius);
     cairo_line_to(cr, right - 0.5, height - edge);
-    cairo_curve_to(cr, right - 0.5, height - edge * 0.45, right - edge * 0.55, height - 0.5, right - 0.5, height - 0.5);
+    cairo_curve_to(cr, right - 0.5, height - edge * 0.45, width - edge * 0.55, height - 0.5, width - 0.5, height - 0.5);
     cairo_set_source_rgb(cr, 0x39 / 255.0, 0x39 / 255.0, 0x36 / 255.0);
     cairo_set_line_width(cr, 1);
     cairo_stroke(cr);
@@ -445,6 +468,7 @@ TabState *new_tab(WindowState *state, const std::string &uri) {
 
     tab->tab = gtk_overlay_new();
     gtk_widget_add_css_class(tab->tab, "browser-tab");
+    gtk_widget_set_hexpand(tab->tab, FALSE);
     gtk_widget_set_size_request(tab->tab, 184, 38);
     tab->backdrop = gtk_drawing_area_new();
     gtk_widget_set_hexpand(tab->backdrop, TRUE);
@@ -496,6 +520,7 @@ TabState *new_tab(WindowState *state, const std::string &uri) {
     g_signal_connect(tab->view, "notify::estimated-load-progress", G_CALLBACK(progress_changed), tab);
     g_signal_connect(tab->view, "notify::favicon", G_CALLBACK(favicon_changed), tab);
     g_signal_connect(tab->view, "load-changed", G_CALLBACK(load_changed), tab);
+    g_signal_connect(tab->view, "load-failed", G_CALLBACK(load_failed), tab);
     g_signal_connect(tab->view, "decide-policy", G_CALLBACK(decide_policy), tab);
     g_signal_connect(tab->view, "load-failed-with-tls-errors", G_CALLBACK(tls_failed), tab);
 
@@ -563,9 +588,9 @@ void install_style(GtkWidget *window) {
         ".tab-strip { margin-top: 2px; }"
         ".browser-tab { min-width: 184px; margin-right: 0; background: transparent; }"
         ".browser-tab-body { background: transparent; }"
-        ".tab-hover-surface { min-height: 24px; margin: 3px 3px 1px; border-radius: 7px; background: transparent; }"
+        ".tab-hover-surface { min-height: 24px; margin: 3px 9px 1px; border-radius: 7px; background: transparent; }"
         ".browser-tab-body.inactive .tab-hover-surface:hover { background: #353432; }"
-        ".browser-tab button { min-height: 22px; padding: 0 7px; border: 0; background: transparent; box-shadow: none; color: #d8d4cc; }"
+        ".browser-tab button { min-height: 22px; padding: 0 7px; border: 0; outline: none; background: transparent; box-shadow: none; color: #d8d4cc; }"
         ".browser-tab .tab-select { min-width: 112px; }"
         ".browser-tab .tab-close { min-width: 20px; padding: 0 4px; opacity: 0; }"
         ".browser-tab:hover .tab-close, .browser-tab-body.active .tab-close { opacity: 1; }"
