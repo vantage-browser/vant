@@ -10,6 +10,6 @@ off external protocols. `file:`, `javascript:`, `data:` and unknown schemes are
 rejected at the application boundary. TLS errors fail closed in the first
 implementation. Pop-ups become ordinary tabs subject to the same policy.
 
-The portable policy is covered here. Native WebKit signal wiring and a hostile
-navigation run remain pending until the target GTK/WebKit environment is
-available; do not claim V1 complete before that evidence exists.
+The policy is wired to WebKit navigation decisions and TLS failures. The managed
+Linux gate launches the real WebKit view under Xvfb. A manual hostile-navigation
+pass on the target Wayland/Omarchy environment remains required before release.

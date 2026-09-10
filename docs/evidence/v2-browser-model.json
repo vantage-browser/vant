@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "checkpoint": "V2",
+  "status": "partial",
+  "verified": ["widget-independent tab model", "activation", "close/reopen", "duplicate", "reorder", "bounded recently-closed list", "10000-cycle churn", "shortcut map", "ASan/UBSan"],
+  "pending": ["GTK tab binding", "native focus traversal", "screen-reader and keyboard-only platform pass"]
+}

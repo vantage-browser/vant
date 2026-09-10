@@ -1,7 +1,8 @@
 {
   "schema_version": 1,
   "checkpoint": "V1",
-  "status": "partial",
-  "verified": ["URL/search normalization", "scheme allowlist", "TLS fail-closed policy", "popup-to-tab policy", "ASan/UBSan"],
-  "pending": ["WebKit signal integration", "exact WebKit runtime identity", "manual hostile-navigation checklist"]
+  "status": "accepted-managed-linux-build",
+  "webkitgtk": "2.52.3",
+  "verified": ["URL/search normalization", "scheme allowlist", "TLS fail-closed policy", "popup denial pending tab binding", "compiled WebKit policy signal integration", "linked WebKit runtime probe", "ASan/UBSan"],
+  "pending": ["real-display WebKit navigation smoke", "target-platform manual hostile-navigation checklist"]
 }

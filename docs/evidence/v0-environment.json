@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
   "checkpoint": "V0",
-  "status": "partial",
+  "status": "accepted-managed-linux-build",
   "environment": "managed Linux x86_64",
   "compiler": "g++ 13.3.0",
-  "gtk4": null,
-  "webkitgtk_6": null,
-  "verified": ["clean core build", "unit lifecycle", "headless smoke", "ASan/UBSan"],
-  "pending": ["native GTK window", "WebKitGTK dependency identity", "Wayland launch/close smoke"]
+  "gtk4": "4.14.5",
+  "webkitgtk_6": "2.52.3",
+  "verified": ["clean native compile/link", "unit lifecycle", "headless smoke", "linked GTK/WebKit runtime probe", "ASan/UBSan"],
+  "pending": ["real display launch/close confirmation", "Wayland/Omarchy launch/close confirmation"]
 }

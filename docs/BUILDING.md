@@ -1,6 +1,6 @@
 # Building Vantage
 
-The portable core requires a C++20 compiler, GNU Make and Python 3. Build and
+Vantage requires a C++20 compiler, GNU Make, Python 3, GTK 4 and WebKitGTK 6.0. Build and
 run its evidence gates with:
 
 ```sh
@@ -10,7 +10,9 @@ make test-sanitize
 make evidence
 ```
 
-The native UI target will require GTK 4 and WebKitGTK 6.0. This checkpoint's
-managed Linux image does not provide those packages, so V0 retains only verified
-portable application lifecycle evidence. A GTK window and real WebKit process
-remain required before V0 can be declared complete on the target platform.
+The retained managed-Linux baseline uses GTK 4.14.5 and WebKitGTK 2.52.3. The
+`make smoke` gate verifies the linked GTK/WebKit versions without requiring a
+display. `make smoke-native` launches the real GTK window and WebKit content
+process when a display is available. This managed container forbids the local
+display socket needed by Xvfb, so the Wayland/Omarchy launch remains a separate
+target-platform gate.
