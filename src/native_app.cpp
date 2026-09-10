@@ -3,7 +3,6 @@
 #include "navigation.h"
 
 #include <gtk/gtk.h>
-#include <gdk-pixbuf/gdk-pixbuf.h>
 #include <libsoup/soup.h>
 #include <webkit/webkit.h>
 
@@ -172,19 +171,11 @@ void fallback_favicon_downloaded(GObject *source, GAsyncResult *result, void *da
     auto *bytes = soup_session_send_and_read_finish(SOUP_SESSION(source), result, &error);
     auto *tab = find_tab(request->state, request->view);
     if (bytes && tab) {
-        gsize size = 0;
-        const auto *contents = static_cast<const guint8 *>(g_bytes_get_data(bytes, &size));
-        auto *loader = gdk_pixbuf_loader_new();
-        if (gdk_pixbuf_loader_write(loader, contents, size, &error) &&
-            gdk_pixbuf_loader_close(loader, &error)) {
-            if (auto *pixbuf = gdk_pixbuf_loader_get_pixbuf(loader)) {
-                auto *texture = gdk_texture_new_for_pixbuf(pixbuf);
-                gtk_image_set_from_paintable(GTK_IMAGE(tab->favicon), GDK_PAINTABLE(texture));
-                g_object_unref(texture);
-                sync_tab_activity(tab);
-            }
+        if (auto *texture = gdk_texture_new_from_bytes(bytes, &error)) {
+            gtk_image_set_from_paintable(GTK_IMAGE(tab->favicon), GDK_PAINTABLE(texture));
+            g_object_unref(texture);
+            sync_tab_activity(tab);
         }
-        g_object_unref(loader);
         g_bytes_unref(bytes);
     }
     if (error) g_error_free(error);
