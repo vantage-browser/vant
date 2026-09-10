@@ -1,0 +1,4 @@
+/build/
+/benchmark-results/
+*.tmp
+*.log
