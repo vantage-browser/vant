@@ -40,6 +40,7 @@ struct TabState {
     std::string internal_uri;
     bool closing{};
     bool hovered{};
+    bool user_stopped{};
 };
 
 struct WindowState {
@@ -163,7 +164,8 @@ void find_changed(GtkEditable *entry, WindowState *state) {
         const auto generation = ++state->find_generation;
         state->custom_find = false;
         const auto clear_script = "window.__vantageFindGeneration=" + std::to_string(generation) +
-            ";CSS.highlights?.delete('vantage-find-all');CSS.highlights?.delete('vantage-find-current')";
+            ";document.querySelectorAll('[data-vantage-find]').forEach(m=>m.replaceWith(document.createTextNode(m.textContent)));"
+            "document.body?.normalize();delete window.__vantageFind";
         webkit_web_view_evaluate_javascript(state->view, clear_script.c_str(),
             -1, nullptr, nullptr, nullptr, nullptr, nullptr);
         state->find_current = state->find_total = 0;
@@ -175,28 +177,28 @@ void find_changed(GtkEditable *entry, WindowState *state) {
     const auto generation = ++state->find_generation;
     const std::string script = "(()=>{const generation=" + std::to_string(generation) +
         ";if((window.__vantageFindGeneration||0)>generation)return -2;window.__vantageFindGeneration=generation;"
-        "if(!globalThis.CSS?.highlights||!globalThis.Highlight)return -1;"
-        "CSS.highlights.delete('vantage-find-all');CSS.highlights.delete('vantage-find-current');"
-        "const q=" + query + ",needle=q.toLocaleLowerCase(),ranges=[];"
+        "document.querySelectorAll('[data-vantage-find]').forEach(m=>m.replaceWith(document.createTextNode(m.textContent)));"
+        "document.body?.normalize();const q=" + query + ",needle=q.toLocaleLowerCase(),nodes=[],matches=[];"
         "const w=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT,{acceptNode(n){"
-        "const p=n.parentElement;if(!p||/^(SCRIPT|STYLE|NOSCRIPT|TEXTAREA|INPUT)$/.test(p.tagName))return NodeFilter.FILTER_REJECT;"
+        "const p=n.parentElement;if(!p||p.closest('[contenteditable=true]')||/^(SCRIPT|STYLE|NOSCRIPT|TEXTAREA|INPUT)$/.test(p.tagName))return NodeFilter.FILTER_REJECT;"
         "return n.data.toLocaleLowerCase().includes(needle)?NodeFilter.FILTER_ACCEPT:NodeFilter.FILTER_REJECT}});"
-        "for(let n;n=w.nextNode();){const s=n.data.toLocaleLowerCase();for(let i=0;(i=s.indexOf(needle,i))>=0;i+=needle.length){"
-        "const r=new Range;r.setStart(n,i);r.setEnd(n,i+needle.length);ranges.push(r)}}"
-        "CSS.highlights.set('vantage-find-all',new Highlight(...ranges));window.__vantageFind={ranges,index:0};"
-        "if(window.__vantageFindGeneration!==generation)return -2;"
-        "if(ranges.length){CSS.highlights.set('vantage-find-current',new Highlight(ranges[0]));"
-        "ranges[0].startContainer.parentElement?.scrollIntoView({block:'center'})}return ranges.length})()";
+        "for(let n;n=w.nextNode();)nodes.push(n);if(window.__vantageFindGeneration!==generation)return -2;"
+        "for(const n of nodes){const original=n.data,lower=original.toLocaleLowerCase(),fragment=document.createDocumentFragment();let from=0,at;"
+        "while((at=lower.indexOf(needle,from))>=0){fragment.append(original.slice(from,at));const mark=document.createElement('span');"
+        "mark.dataset.vantageFind='';mark.className='vantage-find-match';mark.textContent=original.slice(at,at+needle.length);"
+        "fragment.append(mark);matches.push(mark);from=at+needle.length}fragment.append(original.slice(from));n.replaceWith(fragment)}"
+        "window.__vantageFind={matches,index:0};if(matches.length){matches[0].classList.add('vantage-find-current');"
+        "matches[0].scrollIntoView({block:'center'})}return matches.length})()";
     auto *evaluation = new FindEvaluation{state, state->view, generation};
     webkit_web_view_evaluate_javascript(state->view, script.c_str(), -1, nullptr, nullptr, nullptr,
         find_evaluated, evaluation);
 }
 
 void move_custom_find(WindowState *state, int direction) {
-    const std::string script = "(()=>{const f=window.__vantageFind;if(!f?.ranges.length)return;"
-        "f.index=(f.index+" + std::to_string(direction) + "+f.ranges.length)%f.ranges.length;"
-        "const r=f.ranges[f.index];CSS.highlights.set('vantage-find-current',new Highlight(r));"
-        "r.startContainer.parentElement?.scrollIntoView({block:'center'})})()";
+    const std::string script = "(()=>{const f=window.__vantageFind;if(!f?.matches.length)return;"
+        "f.matches[f.index].classList.remove('vantage-find-current');"
+        "f.index=(f.index+" + std::to_string(direction) + "+f.matches.length)%f.matches.length;"
+        "f.matches[f.index].classList.add('vantage-find-current');f.matches[f.index].scrollIntoView({block:'center'})})()";
     webkit_web_view_evaluate_javascript(state->view, script.c_str(), -1, nullptr, nullptr, nullptr,
         nullptr, nullptr);
 }
@@ -224,7 +226,8 @@ void close_find(GtkButton *, WindowState *state) {
     if (state->view) {
         const auto generation = ++state->find_generation;
         const auto script = "window.__vantageFindGeneration=" + std::to_string(generation) +
-            ";CSS.highlights?.delete('vantage-find-all');CSS.highlights?.delete('vantage-find-current')";
+            ";document.querySelectorAll('[data-vantage-find]').forEach(m=>m.replaceWith(document.createTextNode(m.textContent)));"
+            "document.body?.normalize();delete window.__vantageFind";
         webkit_web_view_evaluate_javascript(state->view, script.c_str(), -1, nullptr, nullptr,
             nullptr, nullptr, nullptr);
     }
@@ -472,19 +475,65 @@ std::string favicon_html(ApplicationState *owner, const std::string &uri) {
     return "<span class=fallback>◉</span>";
 }
 
+struct HistoryStamp { std::string key; std::string heading; std::string time; };
+
+HistoryStamp history_stamp(std::int64_t seconds) {
+    auto *date = g_date_time_new_from_unix_local(seconds);
+    auto *today = g_date_time_new_now_local();
+    auto *yesterday = g_date_time_add_days(today, -1);
+    auto format = [date](const char *pattern) {
+        auto *value = g_date_time_format(date, pattern);
+        std::string result = value ? value : "";
+        g_free(value);
+        return result;
+    };
+    const auto key = format("%Y-%m-%d");
+    auto *today_key = g_date_time_format(today, "%Y-%m-%d");
+    auto *yesterday_key = g_date_time_format(yesterday, "%Y-%m-%d");
+    const auto long_date = format("%A, %B %e, %Y");
+    std::string heading = key == (today_key ? today_key : "") ? "Today - " + long_date :
+        key == (yesterday_key ? yesterday_key : "") ? "Yesterday - " + long_date : long_date;
+    auto time = format("%l:%M %p");
+    if (!time.empty() && time.front() == ' ') time.erase(time.begin());
+    g_free(today_key);
+    g_free(yesterday_key);
+    g_date_time_unref(yesterday);
+    g_date_time_unref(today);
+    g_date_time_unref(date);
+    return {key, std::move(heading), std::move(time)};
+}
+
+std::string uri_host(const std::string &uri) {
+    GError *error = nullptr;
+    auto *parsed = g_uri_parse(uri.c_str(), G_URI_FLAGS_NONE, &error);
+    const char *host = parsed ? g_uri_get_host(parsed) : nullptr;
+    std::string result = host ? host : uri;
+    if (parsed) g_uri_unref(parsed);
+    if (error) g_error_free(error);
+    return result;
+}
+
 std::string internal_page(WindowState *state, std::string_view uri) {
     std::string title;
     std::string content;
     if (uri == "vantage:history") {
         title = "History";
+        std::string active_day;
         for (const auto &entry : state->owner->data->history()) {
+            const auto stamp = history_stamp(entry.visited_at);
+            if (stamp.key != active_day) {
+                if (!active_day.empty()) content += "</div></section>";
+                active_day = stamp.key;
+                content += "<section class=history-day><h2>" + html_escape(stamp.heading) + "</h2><div class=history-list>";
+            }
             const auto shown = entry.title.empty() ? entry.uri : entry.title;
-            content += "<div class=item data-search='" + html_escape(shown + " " + entry.uri) + "'><input class=pick type=checkbox value='" +
-                std::to_string(entry.id) + "'>" + favicon_html(state->owner, entry.uri) + "<a class=details href='" + html_escape(entry.uri) +
-                "'><strong>" + html_escape(shown) + "</strong><span>" + html_escape(entry.uri) + "</span></a><details class=rowmenu><summary title='History actions'>⋮</summary>"
+            content += "<div class='item history-item' data-search='" + html_escape(shown + " " + entry.uri + " " + stamp.time) + "'><input class=pick type=checkbox value='" +
+                std::to_string(entry.id) + "'><time>" + html_escape(stamp.time) + "</time>" + favicon_html(state->owner, entry.uri) + "<a class='details history-details' href='" + html_escape(entry.uri) +
+                "'><strong>" + html_escape(shown) + "</strong><span>" + html_escape(uri_host(entry.uri)) + "</span></a><details class=rowmenu><summary title='History actions'>⋮</summary>"
                 "<div><button data-site='" + html_escape(entry.uri) + "' onclick='moreFromSite(this)'>More from this site</button>"
                 "<a href='vantage:history-delete?ids=" + std::to_string(entry.id) + "'>Delete from history</a></div></details></div>";
         }
+        if (!active_day.empty()) content += "</div></section>";
         if (content.empty()) content = "<p class=empty>No browsing history yet.</p>";
     } else if (uri == "vantage:bookmarks") {
         title = "Bookmarks";
@@ -527,13 +576,14 @@ std::string internal_page(WindowState *state, std::string_view uri) {
         "font:15px Inter,'Avenir Next','Segoe UI',system-ui,sans-serif}main{width:min(980px,calc(100% - 48px));margin:48px auto}"
         ".top{display:flex;flex-direction:column;align-items:center;gap:14px;margin-bottom:28px}.top h1{font-size:24px;margin:0}.top .search{width:min(520px,100%)}.bulk{align-self:flex-end;margin-top:-56px}"
         ".search,.form input{height:42px;border:1px solid #4a4844;border-radius:22px;background:#2b2a29;color:#fff;padding:0 18px;outline:none}"
-        ".search:focus,.form input:focus{border-color:#ff8a62}.bulk{justify-self:end}.item{display:flex;align-items:center;gap:14px;padding:14px 16px;margin:0 0 10px;"
+        ".search:focus,.form input:focus{border-color:#ff8a62}.bulk{justify-self:end}[hidden]{display:none!important}.item{display:flex;align-items:center;gap:14px;padding:14px 16px;margin:0 0 10px;"
         "border:1px solid #403e3a;border-radius:11px;background:#292827;color:inherit}.item:hover{border-color:#67635d;background:#302f2d}"
         ".pick{width:17px;height:17px;accent-color:#ff7657}.favicon{width:20px;height:20px;object-fit:contain}.fallback{width:20px;text-align:center;color:#8b8881}"
         ".details{display:flex;flex:1;min-width:0;flex-direction:column;gap:4px;color:inherit;text-decoration:none}.details strong,.details span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}"
         ".item span,.empty{color:#aaa59c}.actions{display:flex;gap:4px}.actions a{display:grid;place-items:center;width:34px;height:34px;background:transparent;color:#c9c4ba;text-decoration:none}.actions svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.actions a:hover{color:#ff8a62}.bulk,.form button{border:0;border-radius:7px;background:#3b3936;color:#eee9df;padding:8px 11px;cursor:pointer}.bulk:hover,.form button:hover{background:#4b4844}.fileicon{display:grid;place-items:center;width:42px;height:46px;border-radius:6px;background:#3f9e91;color:#fff!important;font:bold 10px ui-monospace,monospace;text-transform:uppercase}"
         ".add{margin-bottom:16px}.add summary,.edit summary{cursor:pointer;color:#ccc7bd}.form{display:flex;gap:8px;margin-top:10px}.form input{flex:1;border-radius:8px}.edit{max-width:60px}.edit[open]{max-width:100%;flex:1}"
         ".rowmenu{position:relative}.rowmenu summary{list-style:none;cursor:pointer;font-size:22px;padding:4px 8px}.rowmenu summary::-webkit-details-marker{display:none}.rowmenu>div{position:absolute;z-index:2;right:0;top:32px;width:170px;padding:6px;background:#343331;border:1px solid #4d4a45;border-radius:8px;box-shadow:0 8px 24px #0008}.rowmenu button,.rowmenu a{display:block;width:100%;padding:9px;border:0;background:transparent;color:#eee9df;text-align:left;text-decoration:none}.rowmenu button:hover,.rowmenu a:hover{color:#ff8a62}"
+        ".history-day{margin:0 0 16px;border:1px solid #403e3a;border-radius:11px;background:#292827;overflow:visible}.history-day h2{margin:0;padding:14px 16px 9px;font-size:14px}.history-list{padding:0 8px 8px}.history-item{gap:10px;margin:0;padding:7px 8px;border:0;border-radius:7px;background:transparent}.history-item:hover{border:0;background:#353432}.history-item time{width:76px;flex:none;color:#aaa59c;font-size:12px}.history-item .favicon,.history-item .fallback{width:17px;height:17px}.history-details{flex-direction:row;align-items:baseline;gap:8px}.history-details strong{font-size:13px}.history-details span{font-size:12px}.history-item .rowmenu summary{font-size:19px;padding:1px 6px}"
         "</style></head><body><main><div class=top><h1>" + title + "</h1><input class=search type=search placeholder='Search " + title +
         "' id=pageSearch oninput=filterRows(this.value)>" + bulk + "</div>" + content +
         "</main><script>function filterRows(q){q=q.toLowerCase();document.querySelectorAll('[data-search]').forEach(e=>e.hidden=!e.dataset.search.toLowerCase().includes(q))}"
@@ -601,7 +651,10 @@ void go_forward(GtkButton *, WindowState *state) {
 
 void reload_or_stop(GtkButton *, WindowState *state) {
     if (!state->view) return;
-    if (webkit_web_view_is_loading(state->view)) webkit_web_view_stop_loading(state->view);
+    if (webkit_web_view_is_loading(state->view)) {
+        if (auto *tab = find_tab(state, state->view)) tab->user_stopped = true;
+        webkit_web_view_stop_loading(state->view);
+    }
     else if (auto *tab = find_tab(state, state->view); tab && !tab->internal_uri.empty())
         load_decision(tab, state->policy.resolve(tab->internal_uri));
     else webkit_web_view_reload(state->view);
@@ -729,6 +782,7 @@ void fallback_favicon_url_ready(GObject *source, GAsyncResult *result, void *dat
 }
 
 void load_changed(WebKitWebView *view, WebKitLoadEvent event, TabState *tab) {
+    if (event == WEBKIT_LOAD_STARTED) tab->user_stopped = false;
     if (event != WEBKIT_LOAD_FINISHED) return;
     if (!tab->window->private_mode && tab->internal_uri.empty()) {
         const char *uri = webkit_web_view_get_uri(view);
@@ -891,13 +945,18 @@ gboolean tls_failed(WebKitWebView *, const char *, GTlsCertificate *, GTlsCertif
 }
 
 gboolean load_failed(WebKitWebView *view, WebKitLoadEvent, const char *failing_uri,
-                     GError *error, TabState *) {
-    if (g_error_matches(error, G_IO_ERROR, G_IO_ERROR_CANCELLED) ||
+                     GError *error, TabState *tab) {
+    const bool cancelled = g_error_matches(error, G_IO_ERROR, G_IO_ERROR_CANCELLED) ||
         g_error_matches(error, WEBKIT_NETWORK_ERROR, WEBKIT_NETWORK_ERROR_CANCELLED) ||
         g_error_matches(error, WEBKIT_POLICY_ERROR,
-            WEBKIT_POLICY_ERROR_FRAME_LOAD_INTERRUPTED_BY_POLICY_CHANGE)) return FALSE;
+            WEBKIT_POLICY_ERROR_FRAME_LOAD_INTERRUPTED_BY_POLICY_CHANGE);
+    if (cancelled && !tab->user_stopped) return TRUE;
     auto *escaped_uri = g_markup_escape_text(failing_uri ? failing_uri : "Unknown address", -1);
     auto *escaped_message = g_markup_escape_text(error && error->message ? error->message : "Unknown error", -1);
+    const std::string eyebrow = cancelled ? "Navigation stopped" : "Navigation error";
+    const std::string heading = cancelled ? "Operation cancelled." : "This page is unavailable.";
+    const std::string explanation = cancelled ? "Vantage stopped loading this page at your request." :
+        "Vantage could not finish loading the requested address.";
     const std::string page =
         "<!doctype html><html><head><meta charset=utf-8><title>Page unavailable</title>"
         "<style>html{color-scheme:dark}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;"
@@ -906,8 +965,8 @@ gboolean load_failed(WebKitWebView *view, WebKitLoadEvent, const char *failing_u
         "letter-spacing:.14em;text-transform:uppercase}h1{margin:12px 0 10px;font-size:38px;line-height:1.05}p{color:#aaa49a}"
         "pre{overflow:auto;margin:24px 0 0;padding:18px;background:#0c0c0b;border-left:3px solid #ff7657;color:#d8d4cc;"
         "font:14px/1.6 ui-monospace,monospace;white-space:pre-wrap}.key{color:#79d8b0}.value{color:#ffd37a}</style></head>"
-        "<body><main><small>Navigation error</small><h1>This page is unavailable.</h1>"
-        "<p>Vantage could not finish loading the requested address.</p><pre><span class=key>url</span>     <span class=value>" +
+        "<body><main><small>" + eyebrow + "</small><h1>" + heading + "</h1>"
+        "<p>" + explanation + "</p><pre><span class=key>url</span>     <span class=value>" +
         std::string(escaped_uri) + "</span>\n<span class=key>error</span>   " + std::string(escaped_message) +
         "</pre></main></body></html>";
     g_free(escaped_uri);
@@ -1563,8 +1622,8 @@ TabState *new_tab(WindowState *state, const std::string &uri) {
         ? WEBKIT_WEB_VIEW(g_object_new(WEBKIT_TYPE_WEB_VIEW, "network-session", state->private_session, nullptr))
         : WEBKIT_WEB_VIEW(webkit_web_view_new());
     auto *find_style = webkit_user_style_sheet_new(
-        "::highlight(vantage-find-all){background-color:transparent!important;color:#ffd37a!important}"
-        "::highlight(vantage-find-current){background-color:transparent!important;color:#ff8a62!important}",
+        ".vantage-find-match{background:transparent!important;color:#ffd37a!important}"
+        ".vantage-find-match.vantage-find-current{background:transparent!important;color:#ff8a62!important}",
         WEBKIT_USER_CONTENT_INJECT_ALL_FRAMES, WEBKIT_USER_STYLE_LEVEL_USER, nullptr, nullptr);
     webkit_user_content_manager_add_style_sheet(webkit_web_view_get_user_content_manager(tab->view), find_style);
     webkit_user_style_sheet_unref(find_style);
@@ -1719,6 +1778,7 @@ gboolean key_pressed(GtkEventControllerKey *, guint keyval, guint,
         return TRUE;
     }
     if (keyval == GDK_KEY_Escape && state->view && webkit_web_view_is_loading(state->view)) {
+        if (auto *tab = find_tab(state, state->view)) tab->user_stopped = true;
         webkit_web_view_stop_loading(state->view);
         return TRUE;
     }
