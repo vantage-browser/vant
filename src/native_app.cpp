@@ -62,6 +62,7 @@ struct WindowState {
     bool private_mode{};
     bool new_tab_hovered{};
     double progress_fraction{};
+    ~WindowState() { if (private_session) g_object_unref(private_session); }
 };
 
 struct ApplicationState {
@@ -906,6 +907,7 @@ void install_style(GtkWidget *window) {
     gtk_css_provider_load_from_string(provider,
         "window { background: #171716; color: #ece8df; }"
         "headerbar { min-height: 34px; padding: 0 6px; background: #242423; box-shadow: inset 0 -1px #393936; border: 0; }"
+        "headerbar.private-header { background: #2d2927; }"
         ".tab-strip { margin-top: 2px; }"
         ".browser-tab { min-width: 184px; margin-right: 0; background: transparent; }"
         ".browser-tab-body { background: transparent; }"
@@ -962,6 +964,7 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
         source_width > 0 ? source_width : 1100, source_height > 0 ? source_height : 760);
 
     auto *header = gtk_header_bar_new();
+    if (private_mode) gtk_widget_add_css_class(header, "private-header");
     gtk_header_bar_set_show_title_buttons(GTK_HEADER_BAR(header), TRUE);
     auto *tab_strip = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
     gtk_widget_add_css_class(tab_strip, "tab-strip");
@@ -1117,7 +1120,7 @@ int run_native(bool smoke, const std::string &initial_uri) {
     state.initial_uri = initial_uri;
     state.smoke = smoke;
     state.data = std::make_unique<UserDataStore>(
-        std::filesystem::path(g_get_user_data_dir()) / "vantage-browser" / "browser.sqlite3");
+        std::filesystem::path(g_get_user_data_dir()) / "vantage-browser" / "browser.sqlite3", smoke);
     g_signal_connect(application.get(), "activate", G_CALLBACK(activate), &state);
     return g_application_run(G_APPLICATION(application.get()), 0, nullptr);
 }
