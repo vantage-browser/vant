@@ -83,7 +83,7 @@ struct WindowState {
     unsigned find_current{};
     unsigned find_total{};
     unsigned find_generation{};
-    gint64 address_focused_at{};
+    bool address_was_focused_on_press{};
     bool custom_find{};
     ~WindowState() { if (private_session) g_object_unref(private_session); }
 };
@@ -190,8 +190,9 @@ void find_changed(GtkEditable *entry, WindowState *state) {
         "while((at=lower.indexOf(needle,from))>=0){fragment.append(original.slice(from,at));const mark=document.createElement('span');"
         "mark.dataset.vantageFind='';mark.className='vantage-find-match';mark.textContent=original.slice(at,at+needle.length);"
         "fragment.append(mark);matches.push(mark);from=at+needle.length}fragment.append(original.slice(from));n.replaceWith(fragment)}"
-        "window.__vantageFind={matches,index:0};if(matches.length){matches[0].classList.add('vantage-find-current');"
-        "matches[0].scrollIntoView({block:'center'})}return matches.length})()";
+        "window.__vantageFind={matches,index:0};if(matches.length){const m=matches[0];m.classList.add('vantage-find-current');"
+        "const r=document.createRange();r.selectNodeContents(m);const b=r.getBoundingClientRect();"
+        "window.scrollBy({top:b.top+b.height/2-innerHeight/2})}return matches.length})()";
     auto *evaluation = new FindEvaluation{state, state->view, generation};
     webkit_web_view_evaluate_javascript(state->view, script.c_str(), -1, nullptr, nullptr, nullptr,
         find_evaluated, evaluation);
@@ -201,7 +202,8 @@ void move_custom_find(WindowState *state, int direction) {
     const std::string script = "(()=>{const f=window.__vantageFind;if(!f?.matches.length)return;"
         "f.matches[f.index].classList.remove('vantage-find-current');"
         "f.index=(f.index+" + std::to_string(direction) + "+f.matches.length)%f.matches.length;"
-        "f.matches[f.index].classList.add('vantage-find-current');f.matches[f.index].scrollIntoView({block:'center'})})()";
+        "const m=f.matches[f.index];m.classList.add('vantage-find-current');const r=document.createRange();r.selectNodeContents(m);"
+        "const b=r.getBoundingClientRect();window.scrollBy({top:b.top+b.height/2-innerHeight/2,behavior:'smooth'})})()";
     webkit_web_view_evaluate_javascript(state->view, script.c_str(), -1, nullptr, nullptr, nullptr,
         nullptr, nullptr);
 }
@@ -400,14 +402,15 @@ void page_save_finished(GObject *source, GAsyncResult *result, void *data) {
     delete save;
 }
 
-struct SourceData { WindowState *window{}; WebKitWebView *view{}; std::string uri; };
+struct SourceData { WindowState *window{}; WebKitWebView *target{}; std::string uri; };
 
 void source_loaded(GObject *source, GAsyncResult *result, void *data) {
     auto *request = static_cast<SourceData *>(data);
     GError *error = nullptr;
     gsize size = 0;
     auto *bytes = webkit_web_resource_get_data_finish(WEBKIT_WEB_RESOURCE(source), result, &size, &error);
-    if (bytes && !request->window->closed) {
+    auto *tab = !request->window->closed ? find_tab(request->window, request->target) : nullptr;
+    if (bytes && tab) {
         auto *encoded = g_base64_encode(bytes, size);
         const auto base = javascript_string(request->uri);
         const std::string page = "<!doctype html><html><head><meta charset=utf-8><title>Source</title><style>"
@@ -423,15 +426,12 @@ void source_loaded(GObject *source, GAsyncResult *result, void *data) {
             "else out+=n+'<span class=\"string\">'+esc(m[3])+v+esc(m[3])+'</span>';p=re.lastIndex}out+=esc(t.slice(p));return out.replace(/(&lt;\\/?)([\\w:-]+)/,'$1<span class=\"tag\">$2</span>')}"
             "document.getElementById('s').innerHTML=raw.split(/(<!--[\\s\\S]*?-->|<[^>]+>)/g).map(x=>x.startsWith('<!--')?'<span class=comment>'+esc(x)+'</span>':x.startsWith('<')?tag(x):esc(x)).join('');"
             "</script></body></html>";
-        auto *tab = new_tab(request->window, "vantage:new");
-        tab->internal_uri = "vantage:source";
-        tab->display_uri = "view-source:" + request->uri;
         webkit_web_view_load_html(tab->view, page.c_str(), request->uri.c_str());
         g_free(encoded);
         g_free(bytes);
     } else if (bytes) g_free(bytes);
     if (error) g_error_free(error);
-    g_object_unref(request->view);
+    g_object_unref(request->target);
     delete request;
 }
 
@@ -452,8 +452,15 @@ void page_action(GSimpleAction *, GVariant *, void *data) {
         const char *uri = webkit_web_view_get_uri(action->tab->view);
         auto *resource = webkit_web_view_get_main_resource(action->tab->view);
         if (!resource || !uri) return;
+        auto *target = new_tab(action->tab->window, "vantage:new");
+        target->internal_uri = "vantage:source";
+        target->display_uri = "view-source:" + std::string(uri);
+        webkit_web_view_load_html(target->view,
+            "<!doctype html><html><head><meta charset=utf-8><title>Source</title><style>html{color-scheme:dark}"
+            "body{margin:0;min-height:100vh;display:grid;place-items:center;background:#191918;color:#aaa59c;"
+            "font:14px system-ui}</style></head><body>Loading source…</body></html>", uri);
         auto *request = new SourceData{action->tab->window,
-            WEBKIT_WEB_VIEW(g_object_ref(action->tab->view)), uri};
+            WEBKIT_WEB_VIEW(g_object_ref(target->view)), uri};
         webkit_web_resource_get_data(resource, nullptr, source_loaded, request);
     }
 }
@@ -482,7 +489,12 @@ gboolean context_menu(WebKitWebView *, WebKitContextMenu *menu,
                       WebKitHitTestResult *hit, TabState *tab) {
     const bool link = webkit_hit_test_result_context_is_link(hit);
     const bool image = webkit_hit_test_result_context_is_image(hit);
+    const bool selection = webkit_hit_test_result_context_is_selection(hit);
     webkit_context_menu_remove_all(menu);
+    webkit_context_menu_append(menu, webkit_context_menu_item_new_from_stock_action(WEBKIT_CONTEXT_MENU_ACTION_GO_BACK));
+    webkit_context_menu_append(menu, webkit_context_menu_item_new_from_stock_action(WEBKIT_CONTEXT_MENU_ACTION_GO_FORWARD));
+    webkit_context_menu_append(menu, webkit_context_menu_item_new_from_stock_action(WEBKIT_CONTEXT_MENU_ACTION_RELOAD));
+    webkit_context_menu_append(menu, webkit_context_menu_item_new_separator());
     if (link) {
         const char *uri = webkit_hit_test_result_get_link_uri(hit);
         append_context_open(menu, tab->window, uri, "Open link in new tab", ContextOpen::tab);
@@ -501,8 +513,13 @@ gboolean context_menu(WebKitWebView *, WebKitContextMenu *menu,
             WEBKIT_CONTEXT_MENU_ACTION_COPY_IMAGE_URL_TO_CLIPBOARD));
     }
     if (link || image) webkit_context_menu_append(menu, webkit_context_menu_item_new_separator());
+    if (selection) {
+        webkit_context_menu_append(menu, webkit_context_menu_item_new_from_stock_action(WEBKIT_CONTEXT_MENU_ACTION_COPY));
+        webkit_context_menu_append(menu, webkit_context_menu_item_new_separator());
+    }
     append_page_action(menu, tab, "Save page as…", PageActionKind::save);
     append_page_action(menu, tab, "Print…", PageActionKind::print);
+    webkit_context_menu_append(menu, webkit_context_menu_item_new_separator());
     append_page_action(menu, tab, "View page source", PageActionKind::source);
     return FALSE;
 }
@@ -1380,6 +1397,36 @@ void history_suggestion_clicked(GtkButton *button, WindowState *state) {
     submit_address(nullptr, state);
 }
 
+gboolean suggestion_key_pressed(GtkEventControllerKey *, guint key, guint, GdkModifierType,
+                                GtkWidget *button) {
+    if (key == GDK_KEY_Down) {
+        if (auto *next = gtk_widget_get_next_sibling(button)) gtk_widget_grab_focus(next);
+        return TRUE;
+    }
+    if (key == GDK_KEY_Up) {
+        if (auto *previous = gtk_widget_get_prev_sibling(button)) gtk_widget_grab_focus(previous);
+        else if (auto *popover = gtk_widget_get_ancestor(button, GTK_TYPE_POPOVER)) {
+            auto *relative = gtk_widget_get_parent(popover);
+            if (relative) {
+                auto *entry = gtk_widget_get_first_child(relative);
+                if (entry) gtk_widget_grab_focus(entry);
+            }
+        }
+        return TRUE;
+    }
+    return FALSE;
+}
+
+gboolean address_key_pressed(GtkEventControllerKey *, guint key, guint, GdkModifierType,
+                             WindowState *state) {
+    if (key != GDK_KEY_Down || !gtk_widget_get_visible(state->address_popover)) return FALSE;
+    if (auto *first = gtk_widget_get_first_child(state->address_suggestions)) {
+        gtk_widget_grab_focus(first);
+        return TRUE;
+    }
+    return FALSE;
+}
+
 void address_changed(GtkEditable *editable, WindowState *state) {
     if (!gtk_widget_has_focus(state->address)) return;
     const std::string query = gtk_editable_get_text(editable);
@@ -1412,6 +1459,9 @@ void address_changed(GtkEditable *editable, WindowState *state) {
         gtk_button_set_child(GTK_BUTTON(button), labels);
         g_object_set_data_full(G_OBJECT(button), "suggestion-uri", g_strdup(entry.uri.c_str()), g_free);
         g_signal_connect(button, "clicked", G_CALLBACK(history_suggestion_clicked), state);
+        auto *keys = gtk_event_controller_key_new();
+        g_signal_connect(keys, "key-pressed", G_CALLBACK(suggestion_key_pressed), button);
+        gtk_widget_add_controller(button, keys);
         gtk_box_append(GTK_BOX(state->address_suggestions), button);
         if (++shown == 8) break;
     }
@@ -1710,15 +1760,15 @@ gboolean select_address_deferred(void *data) {
 }
 
 void address_focus_changed(GtkWidget *widget, GParamSpec *, WindowState *state) {
-    if (gtk_widget_has_focus(widget)) {
-        state->address_focused_at = g_get_monotonic_time();
-        g_idle_add(select_address_deferred, state);
-    }
+    if (gtk_widget_has_focus(widget)) g_idle_add(select_address_deferred, state);
 }
 
-void address_clicked(GtkGestureClick *, int, double, double, WindowState *state) {
-    if (g_get_monotonic_time() - state->address_focused_at <= 200000)
-        g_idle_add(select_address_deferred, state);
+void address_pressed(GtkGestureClick *, int, double, double, WindowState *state) {
+    state->address_was_focused_on_press = gtk_widget_has_focus(state->address);
+}
+
+void address_released(GtkGestureClick *, int, double, double, WindowState *state) {
+    if (!state->address_was_focused_on_press) g_idle_add(select_address_deferred, state);
 }
 
 TabState *new_tab(WindowState *state, const std::string &uri) {
@@ -2049,6 +2099,7 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     gtk_widget_add_css_class(state->address_popover, "address-suggestions");
     gtk_popover_set_position(GTK_POPOVER(state->address_popover), GTK_POS_BOTTOM);
     gtk_popover_set_has_arrow(GTK_POPOVER(state->address_popover), FALSE);
+    gtk_popover_set_autohide(GTK_POPOVER(state->address_popover), TRUE);
     state->address_suggestions = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
     gtk_popover_set_child(GTK_POPOVER(state->address_popover), state->address_suggestions);
     gtk_widget_set_parent(state->address_popover, address_wrap);
@@ -2141,9 +2192,13 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     g_signal_connect(state->address, "activate", G_CALLBACK(submit_address), state);
     g_signal_connect(state->address, "changed", G_CALLBACK(address_changed), state);
     g_signal_connect(state->address, "notify::has-focus", G_CALLBACK(address_focus_changed), state);
+    auto *address_keys = gtk_event_controller_key_new();
+    g_signal_connect(address_keys, "key-pressed", G_CALLBACK(address_key_pressed), state);
+    gtk_widget_add_controller(state->address, address_keys);
     auto *address_click = gtk_gesture_click_new();
-    gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(address_click), GTK_PHASE_BUBBLE);
-    g_signal_connect(address_click, "pressed", G_CALLBACK(address_clicked), state);
+    gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(address_click), GTK_PHASE_CAPTURE);
+    g_signal_connect(address_click, "pressed", G_CALLBACK(address_pressed), state);
+    g_signal_connect(address_click, "released", G_CALLBACK(address_released), state);
     gtk_widget_add_controller(state->address, GTK_EVENT_CONTROLLER(address_click));
     g_signal_connect(state->bookmark_button, "clicked", G_CALLBACK(toggle_bookmark), state);
     g_signal_connect(state->find_entry, "changed", G_CALLBACK(find_changed), state);
