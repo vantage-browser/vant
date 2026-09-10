@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "checkpoint": "V1",
+  "status": "partial",
+  "verified": ["URL/search normalization", "scheme allowlist", "TLS fail-closed policy", "popup-to-tab policy", "ASan/UBSan"],
+  "pending": ["WebKit signal integration", "exact WebKit runtime identity", "manual hostile-navigation checklist"]
+}
