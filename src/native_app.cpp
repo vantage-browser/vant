@@ -59,7 +59,8 @@ struct ApplicationState {
 
 void sync_active_chrome(WindowState *state);
 TabState *new_tab(WindowState *state, const std::string &uri);
-void create_window(ApplicationState *owner, const std::string &initial_uri, bool smoke);
+void create_window(ApplicationState *owner, const std::string &initial_uri, bool smoke,
+                   WindowState *source);
 
 TabState *find_tab(WindowState *state, WebKitWebView *view) {
     const auto found = std::find_if(state->tabs.begin(), state->tabs.end(),
@@ -221,31 +222,34 @@ void draw_tab_backdrop(GtkDrawingArea *, cairo_t *cr, int width, int height, voi
     if (tab->window->view != tab->view) return;
 
     const double edge = 9.0;
-    const double top = 6.5;
+    const double inset = 3.0;
+    const double left = inset;
+    const double right = width - inset;
+    const double top = 6.0;
     const double radius = 8.0;
     cairo_new_path(cr);
-    cairo_move_to(cr, 0, height);
-    cairo_curve_to(cr, edge * 0.55, height, edge, height - edge * 0.45, edge, height - edge);
-    cairo_line_to(cr, edge, top + radius);
-    cairo_curve_to(cr, edge, top + 3, edge + 3, top, edge + radius, top);
-    cairo_line_to(cr, width - edge - radius, top);
-    cairo_curve_to(cr, width - edge - 3, top, width - edge, top + 3, width - edge, top + radius);
-    cairo_line_to(cr, width - edge, height - edge);
-    cairo_curve_to(cr, width - edge, height - edge * 0.45, width - edge * 0.55, height, width, height);
-    cairo_line_to(cr, 0, height);
+    cairo_move_to(cr, left, height);
+    cairo_curve_to(cr, left + edge * 0.55, height, left + edge, height - edge * 0.45, left + edge, height - edge);
+    cairo_line_to(cr, left + edge, top + radius);
+    cairo_curve_to(cr, left + edge, top + 3, left + edge + 3, top, left + edge + radius, top);
+    cairo_line_to(cr, right - edge - radius, top);
+    cairo_curve_to(cr, right - edge - 3, top, right - edge, top + 3, right - edge, top + radius);
+    cairo_line_to(cr, right - edge, height - edge);
+    cairo_curve_to(cr, right - edge, height - edge * 0.45, right - edge * 0.55, height, right, height);
+    cairo_line_to(cr, left, height);
     cairo_close_path(cr);
     cairo_set_source_rgb(cr, 0x2c / 255.0, 0x2c / 255.0, 0x2c / 255.0);
     cairo_fill(cr);
 
     cairo_new_path(cr);
-    cairo_move_to(cr, 0.5, height - 0.5);
-    cairo_curve_to(cr, edge * 0.55, height - 0.5, edge + 0.5, height - edge * 0.45, edge + 0.5, height - edge);
-    cairo_line_to(cr, edge + 0.5, top + radius);
-    cairo_curve_to(cr, edge + 0.5, top + 3, edge + 3, top + 0.5, edge + radius, top + 0.5);
-    cairo_line_to(cr, width - edge - radius, top + 0.5);
-    cairo_curve_to(cr, width - edge - 3, top + 0.5, width - edge - 0.5, top + 3, width - edge - 0.5, top + radius);
-    cairo_line_to(cr, width - edge - 0.5, height - edge);
-    cairo_curve_to(cr, width - edge - 0.5, height - edge * 0.45, width - edge * 0.55, height - 0.5, width - 0.5, height - 0.5);
+    cairo_move_to(cr, left + 0.5, height - 0.5);
+    cairo_curve_to(cr, left + edge * 0.55, height - 0.5, left + edge + 0.5, height - edge * 0.45, left + edge + 0.5, height - edge);
+    cairo_line_to(cr, left + edge + 0.5, top + radius);
+    cairo_curve_to(cr, left + edge + 0.5, top + 3, left + edge + 3, top + 0.5, left + edge + radius, top + 0.5);
+    cairo_line_to(cr, right - edge - radius, top + 0.5);
+    cairo_curve_to(cr, right - edge - 3, top + 0.5, right - edge - 0.5, top + 3, right - edge - 0.5, top + radius);
+    cairo_line_to(cr, right - edge - 0.5, height - edge);
+    cairo_curve_to(cr, right - edge - 0.5, height - edge * 0.45, right - edge * 0.55, height - 0.5, right - 0.5, height - 0.5);
     cairo_set_source_rgb(cr, 0x39 / 255.0, 0x39 / 255.0, 0x36 / 255.0);
     cairo_set_line_width(cr, 1);
     cairo_stroke(cr);
@@ -378,7 +382,7 @@ TabState *new_tab(WindowState *state, const std::string &uri) {
 
     tab->tab = gtk_overlay_new();
     gtk_widget_add_css_class(tab->tab, "browser-tab");
-    gtk_widget_set_size_request(tab->tab, 168, 38);
+    gtk_widget_set_size_request(tab->tab, 184, 38);
     tab->backdrop = gtk_drawing_area_new();
     gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(tab->backdrop), draw_tab_backdrop, tab, nullptr);
     gtk_overlay_set_child(GTK_OVERLAY(tab->tab), tab->backdrop);
@@ -457,7 +461,7 @@ gboolean key_pressed(GtkEventControllerKey *, guint keyval, guint,
         return TRUE;
     }
     if (control && (keyval == GDK_KEY_n || keyval == GDK_KEY_N)) {
-        create_window(state->owner, "vantage:new", false);
+        create_window(state->owner, "vantage:new", false, state);
         return TRUE;
     }
     if (control && (keyval == GDK_KEY_w || keyval == GDK_KEY_W)) {
@@ -487,11 +491,11 @@ void install_style(GtkWidget *window) {
     auto *provider = gtk_css_provider_new();
     gtk_css_provider_load_from_string(provider,
         "window { background: #171716; color: #ece8df; }"
-        "headerbar { min-height: 34px; padding: 0 6px; background: #242423; box-shadow: none; border: 0; }"
+        "headerbar { min-height: 34px; padding: 0 6px; background: #242423; box-shadow: none; border: 0; border-bottom: 1px solid #393936; }"
         ".tab-strip { margin-top: 2px; }"
-        ".browser-tab { min-width: 150px; margin-right: 0; background: transparent; }"
+        ".browser-tab { min-width: 184px; margin-right: 0; background: transparent; }"
         ".browser-tab-body { background: transparent; }"
-        ".tab-hover-surface { min-height: 26px; margin: 1px 0; border-radius: 7px; background: transparent; }"
+        ".tab-hover-surface { min-height: 26px; margin: 1px 3px; border-radius: 7px; background: transparent; }"
         ".browser-tab-body.inactive .tab-hover-surface:hover { background: #353432; }"
         ".browser-tab button { min-height: 22px; padding: 0 7px; border: 0; background: transparent; box-shadow: none; color: #d8d4cc; }"
         ".browser-tab .tab-select { min-width: 112px; }"
@@ -517,7 +521,8 @@ void install_style(GtkWidget *window) {
     g_object_unref(provider);
 }
 
-void create_window(ApplicationState *owner, const std::string &initial_uri, bool smoke) {
+void create_window(ApplicationState *owner, const std::string &initial_uri, bool smoke,
+                   WindowState *source) {
     auto owned_state = std::make_unique<WindowState>();
     auto *state = owned_state.get();
     state->owner = owner;
@@ -527,7 +532,10 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
 
     state->window = gtk_application_window_new(owner->application);
     gtk_window_set_title(GTK_WINDOW(state->window), "Vantage Browser");
-    gtk_window_set_default_size(GTK_WINDOW(state->window), 1100, 760);
+    const int source_width = source ? gtk_widget_get_width(source->window) : 0;
+    const int source_height = source ? gtk_widget_get_height(source->window) : 0;
+    gtk_window_set_default_size(GTK_WINDOW(state->window),
+        source_width > 0 ? source_width : 1100, source_height > 0 ? source_height : 760);
 
     auto *header = gtk_header_bar_new();
     gtk_header_bar_set_show_title_buttons(GTK_HEADER_BAR(header), TRUE);
@@ -611,7 +619,7 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
 void activate(GtkApplication *application, void *user_data) {
     auto *owner = static_cast<ApplicationState *>(user_data);
     owner->application = application;
-    create_window(owner, owner->initial_uri, owner->smoke);
+    create_window(owner, owner->initial_uri, owner->smoke, nullptr);
     owner->smoke = false;
 }
 
