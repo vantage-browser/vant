@@ -14,6 +14,7 @@ struct WindowState {
     GtkApplication *application{};
     GtkWidget *window{};
     GtkWidget *address{};
+    GtkWidget *reload_stop{};
     WebKitWebView *view{};
     vantage::NavigationPolicy policy;
     bool smoke{};
@@ -37,8 +38,17 @@ void submit_address(GtkEntry *, WindowState *state) {
 
 void go_back(GtkButton *, WindowState *state) { if (webkit_web_view_can_go_back(state->view)) webkit_web_view_go_back(state->view); }
 void go_forward(GtkButton *, WindowState *state) { if (webkit_web_view_can_go_forward(state->view)) webkit_web_view_go_forward(state->view); }
-void reload(GtkButton *, WindowState *state) { webkit_web_view_reload(state->view); }
-void stop(GtkButton *, WindowState *state) { webkit_web_view_stop_loading(state->view); }
+void reload_or_stop(GtkButton *, WindowState *state) {
+    if (webkit_web_view_is_loading(state->view)) webkit_web_view_stop_loading(state->view);
+    else webkit_web_view_reload(state->view);
+}
+
+void loading_changed(WebKitWebView *view, GParamSpec *, WindowState *state) {
+    const bool loading = webkit_web_view_is_loading(view);
+    gtk_button_set_icon_name(GTK_BUTTON(state->reload_stop),
+        loading ? "process-stop-symbolic" : "view-refresh-symbolic");
+    gtk_widget_set_tooltip_text(state->reload_stop, loading ? "Stop loading" : "Reload");
+}
 
 void uri_changed(WebKitWebView *view, GParamSpec *, WindowState *state) {
     const char *uri = webkit_web_view_get_uri(view);
@@ -99,15 +109,13 @@ void activate(GtkApplication *application, void *user_data) {
     gtk_widget_set_margin_bottom(toolbar, 8);
     auto *back = icon_button("go-previous-symbolic", "Back");
     auto *forward = icon_button("go-next-symbolic", "Forward");
-    auto *reload_button = icon_button("view-refresh-symbolic", "Reload");
-    auto *stop_button = icon_button("process-stop-symbolic", "Stop loading");
+    state->reload_stop = icon_button("view-refresh-symbolic", "Reload");
     state->address = gtk_entry_new();
     gtk_widget_set_hexpand(state->address, TRUE);
     gtk_entry_set_placeholder_text(GTK_ENTRY(state->address), "Search or enter address");
     gtk_box_append(GTK_BOX(toolbar), back);
     gtk_box_append(GTK_BOX(toolbar), forward);
-    gtk_box_append(GTK_BOX(toolbar), reload_button);
-    gtk_box_append(GTK_BOX(toolbar), stop_button);
+    gtk_box_append(GTK_BOX(toolbar), state->reload_stop);
     gtk_box_append(GTK_BOX(toolbar), state->address);
 
     state->view = WEBKIT_WEB_VIEW(webkit_web_view_new());
@@ -118,11 +126,11 @@ void activate(GtkApplication *application, void *user_data) {
 
     g_signal_connect(back, "clicked", G_CALLBACK(go_back), state);
     g_signal_connect(forward, "clicked", G_CALLBACK(go_forward), state);
-    g_signal_connect(reload_button, "clicked", G_CALLBACK(reload), state);
-    g_signal_connect(stop_button, "clicked", G_CALLBACK(stop), state);
+    g_signal_connect(state->reload_stop, "clicked", G_CALLBACK(reload_or_stop), state);
     g_signal_connect(state->address, "activate", G_CALLBACK(submit_address), state);
     g_signal_connect(state->view, "notify::uri", G_CALLBACK(uri_changed), state);
     g_signal_connect(state->view, "notify::title", G_CALLBACK(title_changed), state);
+    g_signal_connect(state->view, "notify::is-loading", G_CALLBACK(loading_changed), state);
     g_signal_connect(state->view, "decide-policy", G_CALLBACK(decide_policy), state);
     g_signal_connect(state->view, "load-failed-with-tls-errors", G_CALLBACK(tls_failed), state);
 
