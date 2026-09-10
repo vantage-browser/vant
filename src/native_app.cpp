@@ -1,13 +1,18 @@
 #include "native_app.h"
 
 #include "navigation.h"
+#include "user_data.h"
 
 #include <gtk/gtk.h>
 #include <libsoup/soup.h>
 #include <webkit/webkit.h>
 
 #include <algorithm>
+#include <chrono>
+#include <filesystem>
+#include <iomanip>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -43,28 +48,85 @@ struct WindowState {
     GtkWidget *reload_icon{};
     GtkWidget *stop_icon{};
     GtkWidget *progress{};
+    GtkWidget *bookmark_button{};
+    GtkWidget *menu_button{};
     GtkWidget *tab_box{};
     GtkWidget *stack{};
     GtkWidget *new_tab_backdrop{};
     WebKitWebView *view{};
+    WebKitNetworkSession *private_session{};
     TabState *middle_pressed_tab{};
     std::vector<std::unique_ptr<TabState>> tabs;
     vantage::NavigationPolicy policy;
     bool smoke{};
+    bool private_mode{};
     bool new_tab_hovered{};
+    double progress_fraction{};
 };
 
 struct ApplicationState {
     GtkApplication *application{};
     std::string initial_uri;
     bool smoke{};
+    std::unique_ptr<vantage::UserDataStore> data;
     std::vector<std::unique_ptr<WindowState>> windows;
 };
 
 void sync_active_chrome(WindowState *state);
 TabState *new_tab(WindowState *state, const std::string &uri);
 void create_window(ApplicationState *owner, const std::string &initial_uri, bool smoke,
-                   WindowState *source);
+                   WindowState *source, bool private_mode = false);
+
+std::int64_t now_seconds() {
+    return std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
+std::string html_escape(std::string_view value) {
+    auto *escaped = g_markup_escape_text(value.data(), static_cast<gssize>(value.size()));
+    std::string result = escaped ? escaped : "";
+    g_free(escaped);
+    return result;
+}
+
+std::string internal_page(WindowState *state, std::string_view uri) {
+    std::string title;
+    std::string content;
+    if (uri == "vantage:history") {
+        title = "History";
+        for (const auto &entry : state->owner->data->history())
+            content += "<a class=item href='" + html_escape(entry.uri) + "'><strong>" +
+                html_escape(entry.title.empty() ? entry.uri : entry.title) + "</strong><span>" +
+                html_escape(entry.uri) + "</span></a>";
+        if (content.empty()) content = "<p class=empty>No browsing history yet.</p>";
+    } else if (uri == "vantage:bookmarks") {
+        title = "Bookmarks";
+        for (const auto &entry : state->owner->data->bookmarks())
+            content += "<a class=item href='" + html_escape(entry.uri) + "'><strong>" +
+                html_escape(entry.title.empty() ? entry.uri : entry.title) + "</strong><span>" +
+                html_escape(entry.uri) + "</span></a>";
+        if (content.empty()) content = "<p class=empty>No bookmarks yet. Use the star in the address bar.</p>";
+    } else if (uri == "vantage:downloads") {
+        title = "Downloads";
+        for (const auto &entry : state->owner->data->downloads())
+            content += "<div class=item><strong>" + html_escape(std::filesystem::path(entry.destination).filename().string()) +
+                "</strong><span>" + html_escape(entry.status) + " · " + html_escape(entry.destination) + "</span></div>";
+        if (content.empty()) content = "<p class=empty>No downloads yet.</p>";
+    } else if (uri == "vantage:settings") {
+        title = "Settings";
+        content = "<div class=item><strong>Privacy by default</strong><span>Vantage does not include telemetry. Private windows use ephemeral storage and do not write browsing history.</span></div>";
+    } else {
+        title = "About Vantage";
+        content = "<div class=item><strong>Vantage Browser</strong><span>A lightweight, privacy-focused WebKit browser.</span></div>";
+    }
+    return "<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
+        "<title>" + title + "</title><style>html{color-scheme:dark}*{box-sizing:border-box}body{margin:0;background:#20201f;color:#eee9df;"
+        "font:15px Inter,'Avenir Next','Segoe UI',system-ui,sans-serif}main{width:min(860px,calc(100% - 48px));margin:64px auto}"
+        "h1{font-size:32px;margin:0 0 28px}.item{display:flex;flex-direction:column;gap:5px;padding:16px 18px;margin:0 0 10px;"
+        "border:1px solid #403e3a;border-radius:11px;background:#292827;color:inherit;text-decoration:none}.item:hover{border-color:#67635d;"
+        "background:#302f2d}.item span,.empty{color:#aaa59c;overflow-wrap:anywhere}</style></head><body><main><h1>" + title +
+        "</h1>" + content + "</main></body></html>";
+}
 
 TabState *find_tab(WindowState *state, WebKitWebView *view) {
     const auto found = std::find_if(state->tabs.begin(), state->tabs.end(),
@@ -78,7 +140,10 @@ void load_decision(TabState *tab, const vantage::NavigationDecision &decision) {
         webkit_web_view_load_uri(tab->view, decision.uri.c_str());
     } else if (decision.kind == vantage::NavigationKind::internal) {
         tab->internal_uri = decision.uri;
-        webkit_web_view_load_html(tab->view,
+        if (decision.uri != "vantage:new" && !decision.uri.starts_with("about:")) {
+            const auto page = internal_page(tab->window, decision.uri);
+            webkit_web_view_load_html(tab->view, page.c_str(), nullptr);
+        } else webkit_web_view_load_html(tab->view,
             "<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
             "<title>New Tab</title><style>html{color-scheme:dark}*{box-sizing:border-box}body{margin:0;min-height:100vh;"
             "display:grid;place-items:center;background:#20201f;font-family:Inter,'Avenir Next','Segoe UI',system-ui,sans-serif}"
@@ -128,8 +193,8 @@ void sync_active_chrome(WindowState *state) {
     }
     gtk_widget_set_tooltip_text(state->reload_stop, loading ? "Stop loading" : "Reload");
     gtk_widget_set_opacity(state->progress, loading ? 1.0 : 0.0);
-    gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(state->progress),
-        webkit_web_view_get_estimated_load_progress(state->view));
+    state->progress_fraction = webkit_web_view_get_estimated_load_progress(state->view);
+    gtk_widget_queue_draw(state->progress);
 
     if (auto *tab = find_tab(state, state->view)) {
         const char *uri = webkit_web_view_get_uri(state->view);
@@ -139,6 +204,11 @@ void sync_active_chrome(WindowState *state) {
             gtk_editable_set_text(GTK_EDITABLE(state->address), shown.c_str());
         const char *title = webkit_web_view_get_title(state->view);
         gtk_window_set_title(GTK_WINDOW(state->window), title && *title ? title : "Vantage Browser");
+        const bool bookmarked = !shown.empty() && state->owner->data->is_bookmarked(shown);
+        gtk_button_set_icon_name(GTK_BUTTON(state->bookmark_button),
+            bookmarked ? "starred-symbolic" : "non-starred-symbolic");
+        gtk_widget_set_tooltip_text(state->bookmark_button,
+            bookmarked ? "Remove bookmark" : "Bookmark this tab");
     }
 }
 
@@ -220,7 +290,14 @@ void fallback_favicon_url_ready(GObject *source, GAsyncResult *result, void *dat
 }
 
 void load_changed(WebKitWebView *view, WebKitLoadEvent event, TabState *tab) {
-    if (event != WEBKIT_LOAD_FINISHED || webkit_web_view_get_favicon(view)) return;
+    if (event != WEBKIT_LOAD_FINISHED) return;
+    if (!tab->window->private_mode && tab->internal_uri.empty()) {
+        const char *uri = webkit_web_view_get_uri(view);
+        const char *title = webkit_web_view_get_title(view);
+        if (uri && (g_str_has_prefix(uri, "http://") || g_str_has_prefix(uri, "https://")))
+            tab->window->owner->data->add_history(uri, title ? title : uri, now_seconds());
+    }
+    if (webkit_web_view_get_favicon(view)) return;
     auto *request = new FaviconRequest{tab->window,
         WEBKIT_WEB_VIEW(g_object_ref(view)), nullptr};
     constexpr auto script = "document.querySelector('link[rel~=icon]')?.href || ''";
@@ -229,9 +306,17 @@ void load_changed(WebKitWebView *view, WebKitLoadEvent event, TabState *tab) {
 }
 
 void progress_changed(WebKitWebView *view, GParamSpec *, TabState *tab) {
-    if (tab->window->view == view)
-        gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(tab->window->progress),
-            webkit_web_view_get_estimated_load_progress(view));
+    if (tab->window->view == view) {
+        tab->window->progress_fraction = webkit_web_view_get_estimated_load_progress(view);
+        gtk_widget_queue_draw(tab->window->progress);
+    }
+}
+
+void draw_load_progress(GtkDrawingArea *, cairo_t *cr, int width, int height, void *data) {
+    const auto fraction = std::clamp(static_cast<WindowState *>(data)->progress_fraction, 0.0, 1.0);
+    cairo_set_source_rgb(cr, 0xff / 255.0, 0x76 / 255.0, 0x57 / 255.0);
+    cairo_rectangle(cr, 0, 0, width * fraction, height);
+    cairo_fill(cr);
 }
 
 void uri_changed(WebKitWebView *view, GParamSpec *, TabState *tab) {
@@ -453,6 +538,156 @@ void header_middle_released(GtkGestureClick *gesture, int, double x, double y, W
 }
 void add_tab(GtkButton *, WindowState *state) { new_tab(state, "vantage:new"); }
 
+void open_internal(WindowState *state, const char *uri) {
+    if (auto *tab = find_tab(state, state->view)) load_decision(tab, state->policy.resolve(uri));
+}
+
+void show_history(GtkButton *, WindowState *state) { open_internal(state, "vantage:history"); }
+void show_downloads(GtkButton *, WindowState *state) { open_internal(state, "vantage:downloads"); }
+void show_bookmarks(GtkButton *, WindowState *state) { open_internal(state, "vantage:bookmarks"); }
+void show_settings(GtkButton *, WindowState *state) { open_internal(state, "vantage:settings"); }
+void show_about(GtkButton *, WindowState *state) { open_internal(state, "vantage:about"); }
+void menu_new_tab(GtkButton *, WindowState *state) { new_tab(state, "vantage:new"); }
+void menu_new_window(GtkButton *, WindowState *state) {
+    create_window(state->owner, "vantage:new", false, state, false);
+}
+void menu_new_private_window(GtkButton *, WindowState *state) {
+    create_window(state->owner, "vantage:new", false, state, true);
+}
+void delete_history(GtkButton *, WindowState *state) {
+    state->owner->data->clear_history();
+    open_internal(state, "vantage:history");
+}
+void toggle_bookmark(GtkButton *, WindowState *state) {
+    if (!state->view) return;
+    const char *uri = webkit_web_view_get_uri(state->view);
+    if (!uri || (!g_str_has_prefix(uri, "http://") && !g_str_has_prefix(uri, "https://"))) return;
+    if (state->owner->data->is_bookmarked(uri)) state->owner->data->remove_bookmark(uri);
+    else {
+        const char *title = webkit_web_view_get_title(state->view);
+        state->owner->data->add_bookmark({uri, title && *title ? title : uri});
+    }
+    sync_active_chrome(state);
+}
+void zoom_in(GtkButton *, WindowState *state) {
+    if (state->view) webkit_web_view_set_zoom_level(state->view,
+        std::min(5.0, webkit_web_view_get_zoom_level(state->view) + 0.1));
+}
+void zoom_out(GtkButton *, WindowState *state) {
+    if (state->view) webkit_web_view_set_zoom_level(state->view,
+        std::max(0.25, webkit_web_view_get_zoom_level(state->view) - 0.1));
+}
+void zoom_reset(GtkButton *, WindowState *state) {
+    if (state->view) webkit_web_view_set_zoom_level(state->view, 1.0);
+}
+void print_page(GtkButton *, WindowState *state) {
+    if (!state->view) return;
+    auto *operation = webkit_print_operation_new(state->view);
+    webkit_print_operation_run_dialog(operation, GTK_WINDOW(state->window));
+    g_object_unref(operation);
+}
+
+GtkWidget *menu_item(const char *label, const char *shortcut, GCallback callback, WindowState *state) {
+    auto *button = gtk_button_new();
+    gtk_widget_add_css_class(button, "menu-item");
+    auto *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+    auto *name = gtk_label_new(label);
+    gtk_widget_set_halign(name, GTK_ALIGN_START);
+    gtk_widget_set_hexpand(name, TRUE);
+    gtk_box_append(GTK_BOX(row), name);
+    if (shortcut && *shortcut) {
+        auto *keys = gtk_label_new(shortcut);
+        gtk_widget_add_css_class(keys, "shortcut");
+        gtk_box_append(GTK_BOX(row), keys);
+    }
+    gtk_button_set_child(GTK_BUTTON(button), row);
+    g_signal_connect(button, "clicked", callback, state);
+    return button;
+}
+
+GtkWidget *create_main_menu(WindowState *state) {
+    auto *popover = gtk_popover_new();
+    gtk_widget_add_css_class(popover, "main-menu");
+    auto *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+    gtk_widget_set_size_request(box, 310, -1);
+    gtk_box_append(GTK_BOX(box), menu_item("New tab", "Ctrl+T", G_CALLBACK(menu_new_tab), state));
+    gtk_box_append(GTK_BOX(box), menu_item("New window", "Ctrl+N", G_CALLBACK(menu_new_window), state));
+    gtk_box_append(GTK_BOX(box), menu_item("New private window", "Ctrl+Shift+N", G_CALLBACK(menu_new_private_window), state));
+    gtk_box_append(GTK_BOX(box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
+    gtk_box_append(GTK_BOX(box), menu_item("History", "Ctrl+H", G_CALLBACK(show_history), state));
+    gtk_box_append(GTK_BOX(box), menu_item("Downloads", "Ctrl+J", G_CALLBACK(show_downloads), state));
+    gtk_box_append(GTK_BOX(box), menu_item("Bookmarks", "", G_CALLBACK(show_bookmarks), state));
+    gtk_box_append(GTK_BOX(box), menu_item("Delete history", "Ctrl+Shift+Delete", G_CALLBACK(delete_history), state));
+    gtk_box_append(GTK_BOX(box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
+    auto *zoom = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
+    gtk_widget_add_css_class(zoom, "zoom-row");
+    auto *zoom_label = gtk_label_new("Zoom");
+    gtk_widget_set_hexpand(zoom_label, TRUE);
+    gtk_widget_set_halign(zoom_label, GTK_ALIGN_START);
+    gtk_box_append(GTK_BOX(zoom), zoom_label);
+    auto *minus = gtk_button_new_with_label("−");
+    auto *reset = gtk_button_new_with_label("100%");
+    auto *plus = gtk_button_new_with_label("+");
+    g_signal_connect(minus, "clicked", G_CALLBACK(zoom_out), state);
+    g_signal_connect(reset, "clicked", G_CALLBACK(zoom_reset), state);
+    g_signal_connect(plus, "clicked", G_CALLBACK(zoom_in), state);
+    gtk_box_append(GTK_BOX(zoom), minus); gtk_box_append(GTK_BOX(zoom), reset); gtk_box_append(GTK_BOX(zoom), plus);
+    gtk_box_append(GTK_BOX(box), zoom);
+    gtk_box_append(GTK_BOX(box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
+    gtk_box_append(GTK_BOX(box), menu_item("Print", "Ctrl+P", G_CALLBACK(print_page), state));
+    gtk_box_append(GTK_BOX(box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
+    gtk_box_append(GTK_BOX(box), menu_item("About Vantage", "", G_CALLBACK(show_about), state));
+    gtk_box_append(GTK_BOX(box), menu_item("Settings", "", G_CALLBACK(show_settings), state));
+    gtk_popover_set_child(GTK_POPOVER(popover), box);
+    return popover;
+}
+
+struct DownloadContext {
+    ApplicationState *owner{};
+    std::int64_t record{};
+    bool failed{};
+    bool private_mode{};
+};
+
+gboolean download_destination(WebKitDownload *download, const char *suggested, DownloadContext *context) {
+    const char *downloads = g_get_user_special_dir(G_USER_DIRECTORY_DOWNLOAD);
+    std::filesystem::path directory = downloads ? downloads : g_get_home_dir();
+    auto destination = vantage::safe_download_path(directory, suggested ? suggested : "download");
+    for (unsigned suffix = 1; std::filesystem::exists(destination); ++suffix) {
+        const auto stem = destination.stem().string();
+        const auto extension = destination.extension().string();
+        destination = directory / (stem + " (" + std::to_string(suffix) + ")" + extension);
+    }
+    auto *uri = g_filename_to_uri(destination.c_str(), nullptr, nullptr);
+    if (!uri) return FALSE;
+    webkit_download_set_destination(download, uri);
+    const char *source = webkit_uri_request_get_uri(webkit_download_get_request(download));
+    if (!context->private_mode)
+        context->record = context->owner->data->add_download(source ? source : "", destination.string(), "downloading", now_seconds());
+    g_free(uri);
+    return TRUE;
+}
+
+void download_failed(WebKitDownload *, GError *, DownloadContext *context) {
+    context->failed = true;
+    if (!context->private_mode) context->owner->data->update_download(context->record, "failed");
+}
+void download_finished(WebKitDownload *, DownloadContext *context) {
+    if (!context->failed && !context->private_mode)
+        context->owner->data->update_download(context->record, "complete");
+    delete context;
+}
+void download_started(WebKitNetworkSession *, WebKitDownload *download, ApplicationState *owner) {
+    auto *view = webkit_download_get_web_view(download);
+    bool private_mode = false;
+    for (const auto &window : owner->windows)
+        if (find_tab(window.get(), view)) { private_mode = window->private_mode; break; }
+    auto *context = new DownloadContext{owner, 0, false, private_mode};
+    g_signal_connect(download, "decide-destination", G_CALLBACK(download_destination), context);
+    g_signal_connect(download, "failed", G_CALLBACK(download_failed), context);
+    g_signal_connect(download, "finished", G_CALLBACK(download_finished), context);
+}
+
 GtkWidget *icon_button(const char *icon, const char *tooltip) {
     auto *button = gtk_button_new_from_icon_name(icon);
     gtk_widget_add_css_class(button, "flat");
@@ -517,7 +752,9 @@ TabState *new_tab(WindowState *state, const std::string &uri) {
     auto owned = std::make_unique<TabState>();
     auto *tab = owned.get();
     tab->window = state;
-    tab->view = WEBKIT_WEB_VIEW(webkit_web_view_new());
+    tab->view = state->private_session
+        ? WEBKIT_WEB_VIEW(g_object_new(WEBKIT_TYPE_WEB_VIEW, "network-session", state->private_session, nullptr))
+        : WEBKIT_WEB_VIEW(webkit_web_view_new());
     tab->page = GTK_WIDGET(tab->view);
     gtk_widget_set_vexpand(tab->page, TRUE);
     gtk_stack_add_child(GTK_STACK(state->stack), tab->page);
@@ -615,7 +852,25 @@ gboolean key_pressed(GtkEventControllerKey *, guint keyval, guint,
         return TRUE;
     }
     if (control && (keyval == GDK_KEY_n || keyval == GDK_KEY_N)) {
-        create_window(state->owner, "vantage:new", false, state);
+        if ((modifiers & GDK_SHIFT_MASK) != 0)
+            create_window(state->owner, "vantage:new", false, state, true);
+        else create_window(state->owner, "vantage:new", false, state, false);
+        return TRUE;
+    }
+    if (control && (keyval == GDK_KEY_j || keyval == GDK_KEY_J)) {
+        open_internal(state, "vantage:downloads");
+        return TRUE;
+    }
+    if (control && (keyval == GDK_KEY_h || keyval == GDK_KEY_H)) {
+        open_internal(state, "vantage:history");
+        return TRUE;
+    }
+    if (control && (keyval == GDK_KEY_d || keyval == GDK_KEY_D)) {
+        toggle_bookmark(nullptr, state);
+        return TRUE;
+    }
+    if (control && (keyval == GDK_KEY_p || keyval == GDK_KEY_P)) {
+        print_page(nullptr, state);
         return TRUE;
     }
     if (control && (keyval == GDK_KEY_w || keyval == GDK_KEY_W)) {
@@ -664,11 +919,19 @@ void install_style(GtkWidget *window) {
         ".toolbar button.flat:active { background: #494741; }"
         ".new-tab.flat:hover, .new-tab.flat:active { background: transparent; color: #fffaf0; }"
         ".toolbar .stop-icon { font-size: 27px; font-weight: 400; }"
-        ".toolbar entry { min-height: 30px; padding: 0 12px; border-radius: 8px; border: 1px solid #45433f; background: #191918; color: #f1ede3; box-shadow: none; }"
+        ".address-wrap entry { min-height: 30px; padding: 0 38px 0 12px; border-radius: 8px; border: 1px solid #45433f; background: #191918; color: #f1ede3; box-shadow: none; }"
         ".toolbar entry:focus { border-color: #ff8a62; box-shadow: 0 0 0 1px #ff8a62; }"
+        ".address-bookmark { margin-right: 4px; }"
+        ".main-menu contents { padding: 8px; border: 1px solid #474641; border-radius: 12px; background: #2c2c2c; }"
+        ".main-menu .menu-item { padding: 8px 10px; border: 0; border-radius: 7px; background: transparent; color: #eee9df; box-shadow: none; }"
+        ".main-menu .menu-item:hover { background: #474642; }"
+        ".main-menu .shortcut { color: #aaa59c; }"
+        ".main-menu separator { margin: 5px 2px; background: #494844; }"
+        ".main-menu .zoom-row { padding: 5px 10px; }"
+        ".main-menu .zoom-row button { min-width: 34px; padding: 5px; border: 0; border-radius: 6px; background: transparent; color: #eee9df; box-shadow: none; }"
+        ".main-menu .zoom-row button:hover { background: #474642; }"
         ".browser-tab spinner { color: #ff8a62; }"
-        ".load-progress trough { min-height: 2px; background: transparent; border: 0; }"
-        ".load-progress progress { min-height: 2px; background: #ff7657; border: 0; }"
+        ".load-progress { min-width: 0; min-height: 2px; background: transparent; }"
     );
     gtk_style_context_add_provider_for_display(gtk_widget_get_display(window),
         GTK_STYLE_PROVIDER(provider), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
@@ -676,16 +939,18 @@ void install_style(GtkWidget *window) {
 }
 
 void create_window(ApplicationState *owner, const std::string &initial_uri, bool smoke,
-                   WindowState *source) {
+                   WindowState *source, bool private_mode) {
     auto owned_state = std::make_unique<WindowState>();
     auto *state = owned_state.get();
     state->owner = owner;
     state->application = owner->application;
     state->smoke = smoke;
+    state->private_mode = private_mode;
+    if (private_mode) state->private_session = webkit_network_session_new_ephemeral();
     owner->windows.push_back(std::move(owned_state));
 
     state->window = gtk_application_window_new(owner->application);
-    gtk_window_set_title(GTK_WINDOW(state->window), "Vantage Browser");
+    gtk_window_set_title(GTK_WINDOW(state->window), private_mode ? "Vantage Private" : "Vantage Browser");
     const int source_width = source ? gtk_widget_get_width(source->window) : 0;
     const int source_height = source ? gtk_widget_get_height(source->window) : 0;
     gtk_window_set_default_size(GTK_WINDOW(state->window),
@@ -757,9 +1022,29 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     gtk_box_append(GTK_BOX(toolbar), back);
     gtk_box_append(GTK_BOX(toolbar), forward);
     gtk_box_append(GTK_BOX(toolbar), state->reload_stop);
-    gtk_box_append(GTK_BOX(toolbar), state->address);
+    auto *address_wrap = gtk_overlay_new();
+    gtk_widget_add_css_class(address_wrap, "address-wrap");
+    gtk_widget_set_hexpand(address_wrap, TRUE);
+    gtk_overlay_set_child(GTK_OVERLAY(address_wrap), state->address);
+    state->bookmark_button = icon_button("non-starred-symbolic", "Bookmark this tab");
+    gtk_widget_add_css_class(state->bookmark_button, "address-bookmark");
+    gtk_widget_set_halign(state->bookmark_button, GTK_ALIGN_END);
+    gtk_widget_set_valign(state->bookmark_button, GTK_ALIGN_CENTER);
+    gtk_overlay_add_overlay(GTK_OVERLAY(address_wrap), state->bookmark_button);
+    gtk_box_append(GTK_BOX(toolbar), address_wrap);
+    auto *downloads_button = icon_button("folder-download-symbolic", "Downloads");
+    gtk_box_append(GTK_BOX(toolbar), downloads_button);
+    state->menu_button = gtk_menu_button_new();
+    gtk_widget_add_css_class(state->menu_button, "flat");
+    gtk_widget_set_tooltip_text(state->menu_button, "Customize and control Vantage");
+    gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(state->menu_button), "view-more-symbolic");
+    gtk_menu_button_set_popover(GTK_MENU_BUTTON(state->menu_button), create_main_menu(state));
+    gtk_box_append(GTK_BOX(toolbar), state->menu_button);
 
-    state->progress = gtk_progress_bar_new();
+    state->progress = gtk_drawing_area_new();
+    gtk_widget_set_size_request(state->progress, -1, 2);
+    gtk_widget_set_hexpand(state->progress, TRUE);
+    gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(state->progress), draw_load_progress, state, nullptr);
     gtk_widget_add_css_class(state->progress, "load-progress");
     gtk_widget_set_opacity(state->progress, 0.0);
     auto *navigation = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
@@ -778,12 +1063,19 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     g_signal_connect(forward, "clicked", G_CALLBACK(go_forward), state);
     g_signal_connect(state->reload_stop, "clicked", G_CALLBACK(reload_or_stop), state);
     g_signal_connect(state->address, "activate", G_CALLBACK(submit_address), state);
+    g_signal_connect(state->bookmark_button, "clicked", G_CALLBACK(toggle_bookmark), state);
+    g_signal_connect(downloads_button, "clicked", G_CALLBACK(show_downloads), state);
     g_signal_connect(new_button, "clicked", G_CALLBACK(add_tab), state);
     auto *keys = gtk_event_controller_key_new();
     g_signal_connect(keys, "key-pressed", G_CALLBACK(key_pressed), state);
     gtk_widget_add_controller(state->window, keys);
 
     auto *tab = new_tab(state, initial_uri);
+    auto *network_session = webkit_web_view_get_network_session(tab->view);
+    if (!g_object_get_data(G_OBJECT(network_session), "vantage-download-handler")) {
+        g_signal_connect(network_session, "download-started", G_CALLBACK(download_started), owner);
+        g_object_set_data(G_OBJECT(network_session), "vantage-download-handler", owner);
+    }
     gtk_window_present(GTK_WINDOW(state->window));
     if (initial_uri.starts_with("vantage:") || initial_uri.starts_with("about:")) {
         gtk_widget_grab_focus(state->address);
@@ -797,7 +1089,7 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
 void activate(GtkApplication *application, void *user_data) {
     auto *owner = static_cast<ApplicationState *>(user_data);
     owner->application = application;
-    create_window(owner, owner->initial_uri, owner->smoke, nullptr);
+    create_window(owner, owner->initial_uri, owner->smoke, nullptr, false);
     owner->smoke = false;
 }
 
@@ -819,6 +1111,8 @@ int run_native(bool smoke, const std::string &initial_uri) {
     state.application = application.get();
     state.initial_uri = initial_uri;
     state.smoke = smoke;
+    state.data = std::make_unique<UserDataStore>(
+        std::filesystem::path(g_get_user_data_dir()) / "vantage-browser" / "browser.sqlite3");
     g_signal_connect(application.get(), "activate", G_CALLBACK(activate), &state);
     return g_application_run(G_APPLICATION(application.get()), 0, nullptr);
 }
