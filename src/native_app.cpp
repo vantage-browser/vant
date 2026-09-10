@@ -133,6 +133,28 @@ GtkWidget *icon_button(const char *icon, const char *tooltip) {
     return button;
 }
 
+void install_style(GtkWidget *window) {
+    auto *provider = gtk_css_provider_new();
+    gtk_css_provider_load_from_string(provider,
+        "window { background: #171716; color: #ece8df; }"
+        ".navigation { background: #242423; border-bottom: 1px solid #393936; }"
+        ".toolbar { padding: 6px 8px; }"
+        ".toolbar button.flat { min-width: 28px; min-height: 28px; padding: 2px;"
+        "  border: 0; border-radius: 7px; background: transparent; color: #d8d4cc; box-shadow: none; }"
+        ".toolbar button.flat:hover { background: #3a3936; color: #fffaf0; }"
+        ".toolbar button.flat:active { background: #494741; }"
+        ".toolbar entry { min-height: 30px; padding: 0 12px; border-radius: 8px;"
+        "  border: 1px solid #45433f; background: #191918; color: #f1ede3; box-shadow: none; }"
+        ".toolbar entry:focus { border-color: #ff8a62; box-shadow: 0 0 0 1px #ff8a62; }"
+        ".toolbar spinner { color: #ff8a62; margin: 0 2px; }"
+        ".load-progress trough { min-height: 2px; background: transparent; border: 0; }"
+        ".load-progress progress { min-height: 2px; background: #ff7657; border: 0; }"
+    );
+    gtk_style_context_add_provider_for_display(gtk_widget_get_display(window),
+        GTK_STYLE_PROVIDER(provider), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+    g_object_unref(provider);
+}
+
 void activate(GtkApplication *application, void *user_data) {
     auto *state = static_cast<WindowState *>(user_data);
     state->application = application;
@@ -142,6 +164,7 @@ void activate(GtkApplication *application, void *user_data) {
 
     auto *layout = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     auto *toolbar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    gtk_widget_add_css_class(toolbar, "toolbar");
     gtk_widget_set_margin_start(toolbar, 8);
     gtk_widget_set_margin_end(toolbar, 8);
     gtk_widget_set_margin_top(toolbar, 8);
@@ -161,8 +184,10 @@ void activate(GtkApplication *application, void *user_data) {
     gtk_box_append(GTK_BOX(toolbar), state->address);
 
     state->progress = gtk_progress_bar_new();
+    gtk_widget_add_css_class(state->progress, "load-progress");
     gtk_widget_set_visible(state->progress, FALSE);
     auto *navigation = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_widget_add_css_class(navigation, "navigation");
     gtk_box_append(GTK_BOX(navigation), toolbar);
     gtk_box_append(GTK_BOX(navigation), state->progress);
 
@@ -171,6 +196,7 @@ void activate(GtkApplication *application, void *user_data) {
     gtk_box_append(GTK_BOX(layout), navigation);
     gtk_box_append(GTK_BOX(layout), GTK_WIDGET(state->view));
     gtk_window_set_child(GTK_WINDOW(state->window), layout);
+    install_style(state->window);
 
     g_signal_connect(back, "clicked", G_CALLBACK(go_back), state);
     g_signal_connect(forward, "clicked", G_CALLBACK(go_forward), state);
