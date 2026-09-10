@@ -69,6 +69,7 @@ struct WindowState {
     GtkWidget *downloads_spinner{};
     GtkWidget *tab_box{};
     GtkWidget *tab_scroller{};
+    GtkWidget *new_tab_button{};
     GtkWidget *stack{};
     GtkWidget *new_tab_backdrop{};
     WebKitWebView *view{};
@@ -81,6 +82,7 @@ struct WindowState {
     bool closed{};
     bool new_tab_hovered{};
     double progress_fraction{};
+    gint64 last_tab_scroll{};
     unsigned find_current{};
     unsigned find_total{};
     unsigned find_generation{};
@@ -454,6 +456,7 @@ void page_action(GSimpleAction *, GVariant *, void *data) {
         auto *target = new_tab(action->tab->window, "vantage:new", false);
         target->internal_uri = "vantage:source";
         target->display_uri = "source:" + std::string(uri);
+        gtk_editable_set_text(GTK_EDITABLE(action->tab->window->address), target->display_uri.c_str());
         webkit_web_view_load_html(target->view,
             "<!doctype html><html><head><meta charset=utf-8><title>Source</title><style>html{color-scheme:dark}"
             "body{margin:0;min-height:100vh;display:grid;place-items:center;background:#191918;color:#aaa59c;"
@@ -1099,7 +1102,9 @@ gboolean reveal_tab_deferred(void *data) {
             const double current = gtk_adjustment_get_value(adjustment);
             const double page = gtk_adjustment_get_page_size(adjustment);
             const double left = bounds.origin.x;
-            const double right = left + bounds.size.width;
+            double right = left + bounds.size.width;
+            if (!reveal->state->tabs.empty() && reveal->state->tabs.back().get() == tab &&
+                reveal->state->new_tab_button) right += gtk_widget_get_width(reveal->state->new_tab_button);
             if (left < current) gtk_adjustment_set_value(adjustment, left);
             else if (right > current + page) gtk_adjustment_set_value(adjustment, right - page);
         }
@@ -1130,12 +1135,15 @@ void select_tab(TabState *tab) {
 
 gboolean tab_strip_scrolled(GtkEventControllerScroll *, double, double dy, WindowState *state) {
     if (state->tabs.size() < 2 || std::abs(dy) < 0.01) return FALSE;
+    const auto now = g_get_monotonic_time();
+    if (now - state->last_tab_scroll < 180000) return TRUE;
     const auto found = std::find_if(state->tabs.begin(), state->tabs.end(),
         [state](const auto &tab) { return tab->view == state->view; });
     if (found == state->tabs.end()) return FALSE;
     auto index = static_cast<std::size_t>(std::distance(state->tabs.begin(), found));
-    if (dy > 0) index = (index + 1) % state->tabs.size();
-    else index = (index + state->tabs.size() - 1) % state->tabs.size();
+    if ((dy > 0 && index + 1 == state->tabs.size()) || (dy < 0 && index == 0)) return TRUE;
+    index = dy > 0 ? index + 1 : index - 1;
+    state->last_tab_scroll = now;
     select_tab(state->tabs[index].get());
     return TRUE;
 }
@@ -1426,7 +1434,7 @@ void clear_box(GtkWidget *box) {
 void history_suggestion_clicked(GtkButton *button, WindowState *state) {
     const auto *uri = static_cast<const char *>(g_object_get_data(G_OBJECT(button), "suggestion-uri"));
     if (!uri) return;
-    gtk_popover_popdown(GTK_POPOVER(state->address_popover));
+    gtk_widget_set_visible(state->address_popover, FALSE);
     gtk_editable_set_text(GTK_EDITABLE(state->address), uri);
     submit_address(nullptr, state);
 }
@@ -1439,13 +1447,8 @@ gboolean suggestion_key_pressed(GtkEventControllerKey *, guint key, guint, GdkMo
     }
     if (key == GDK_KEY_Up) {
         if (auto *previous = gtk_widget_get_prev_sibling(button)) gtk_widget_grab_focus(previous);
-        else if (auto *popover = gtk_widget_get_ancestor(button, GTK_TYPE_POPOVER)) {
-            auto *relative = gtk_widget_get_parent(popover);
-            if (relative) {
-                auto *entry = gtk_widget_get_first_child(relative);
-                if (entry) gtk_widget_grab_focus(entry);
-            }
-        }
+        else if (auto *state = static_cast<WindowState *>(g_object_get_data(G_OBJECT(button), "window-state")))
+            gtk_widget_grab_focus(state->address);
         return TRUE;
     }
     return FALSE;
@@ -1478,6 +1481,10 @@ gboolean toolbar_focus_key(GtkEventControllerKey *controller, guint key, guint,
         gtk_widget_grab_focus(state->address);
         return TRUE;
     }
+    if (widget == state->bookmark_button && !reverse) {
+        gtk_widget_grab_focus(state->downloads_button);
+        return TRUE;
+    }
     return FALSE;
 }
 
@@ -1486,7 +1493,7 @@ void address_changed(GtkEditable *editable, WindowState *state) {
     const std::string query = gtk_editable_get_text(editable);
     clear_box(state->address_suggestions);
     if (query.empty()) {
-        gtk_popover_popdown(GTK_POPOVER(state->address_popover));
+        gtk_widget_set_visible(state->address_popover, FALSE);
         return;
     }
     std::string needle = query;
@@ -1512,6 +1519,7 @@ void address_changed(GtkEditable *editable, WindowState *state) {
         gtk_box_append(GTK_BOX(labels), uri);
         gtk_button_set_child(GTK_BUTTON(button), labels);
         g_object_set_data_full(G_OBJECT(button), "suggestion-uri", g_strdup(entry.uri.c_str()), g_free);
+        g_object_set_data(G_OBJECT(button), "window-state", state);
         g_signal_connect(button, "clicked", G_CALLBACK(history_suggestion_clicked), state);
         auto *keys = gtk_event_controller_key_new();
         g_signal_connect(keys, "key-pressed", G_CALLBACK(suggestion_key_pressed), button);
@@ -1520,14 +1528,9 @@ void address_changed(GtkEditable *editable, WindowState *state) {
         if (++shown == 8) break;
     }
     if (shown) {
-        const int width = gtk_widget_get_width(state->address);
-        gtk_widget_set_size_request(state->address_popover, std::max(width, 320), -1);
-        const GdkRectangle anchor{0, 0, std::max(width, 1), std::max(gtk_widget_get_height(state->address), 1)};
-        gtk_popover_set_pointing_to(GTK_POPOVER(state->address_popover), &anchor);
-        gtk_popover_popup(GTK_POPOVER(state->address_popover));
-        gtk_popover_present(GTK_POPOVER(state->address_popover));
+        gtk_widget_set_visible(state->address_popover, TRUE);
     }
-    else gtk_popover_popdown(GTK_POPOVER(state->address_popover));
+    else gtk_widget_set_visible(state->address_popover, FALSE);
 }
 
 GtkWidget *download_row(const std::string &name, const std::string &detail, bool active) {
@@ -1873,7 +1876,8 @@ TabState *new_tab(WindowState *state, const std::string &uri, bool load_initial)
     gtk_box_append(GTK_BOX(hover_surface), close);
     gtk_box_append(GTK_BOX(tab->body), hover_surface);
     gtk_overlay_add_overlay(GTK_OVERLAY(tab->tab), tab->body);
-    gtk_box_append(GTK_BOX(state->tab_box), tab->tab);
+    GtkWidget *previous = state->tabs.empty() ? nullptr : state->tabs.back()->tab;
+    gtk_box_insert_child_after(GTK_BOX(state->tab_box), tab->tab, previous);
 
     auto *tab_motion = gtk_event_controller_motion_new();
     g_signal_connect(tab_motion, "enter", G_CALLBACK(tab_pointer_entered), tab);
@@ -2016,7 +2020,7 @@ void install_style(GtkWidget *window) {
         ".toolbar .stop-icon { font-size: 27px; font-weight: 400; }"
         ".address-wrap entry { min-height: 30px; padding: 0 38px 0 12px; border-radius: 8px; border: 1px solid #45433f; background: #191918; color: #f1ede3; box-shadow: none; }"
         ".toolbar entry:focus { border-color: #ff8a62; box-shadow: 0 0 0 1px #ff8a62; }"
-        ".address-suggestions contents { padding: 7px; border: 1px solid #474641; border-radius: 10px; background: #2c2c2c; }"
+        ".address-suggestions { padding: 7px; border: 1px solid #474641; border-radius: 10px; background: #2c2c2c; }"
         ".address-suggestion { min-width: 0; padding: 8px 11px; border: 0; border-radius: 7px; background: transparent; color: #eee9df; box-shadow: none; }"
         ".address-suggestion:hover { background: #45433f; }.address-suggestion .suggestion-uri { color: #aaa59c; font-size: 12px; }"
         ".address-bookmark { margin-right: 4px; }"
@@ -2084,6 +2088,7 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     gtk_widget_set_size_request(state->tab_scroller, 184, -1);
     gtk_widget_set_hexpand(state->tab_scroller, TRUE);
     auto *new_button = gtk_button_new();
+    state->new_tab_button = new_button;
     gtk_widget_add_css_class(new_button, "flat");
     gtk_widget_set_tooltip_text(new_button, "New tab");
     gtk_widget_add_css_class(new_button, "new-tab");
@@ -2105,11 +2110,10 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     g_signal_connect(new_tab_motion, "enter", G_CALLBACK(new_tab_pointer_entered), state);
     g_signal_connect(new_tab_motion, "leave", G_CALLBACK(new_tab_pointer_left), state);
     gtk_widget_add_controller(new_button, new_tab_motion);
+    gtk_box_append(GTK_BOX(state->tab_box), new_button);
     gtk_box_append(GTK_BOX(tab_strip), state->tab_scroller);
-    gtk_box_append(GTK_BOX(tab_strip), new_button);
     gtk_widget_set_hexpand(tab_strip, TRUE);
-    gtk_header_bar_pack_start(GTK_HEADER_BAR(header), tab_strip);
-    gtk_header_bar_set_title_widget(GTK_HEADER_BAR(header), gtk_label_new(nullptr));
+    gtk_header_bar_set_title_widget(GTK_HEADER_BAR(header), tab_strip);
     auto *header_middle = gtk_gesture_click_new();
     gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(header_middle), GDK_BUTTON_MIDDLE);
     gtk_gesture_single_set_exclusive(GTK_GESTURE_SINGLE(header_middle), TRUE);
@@ -2118,6 +2122,7 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     g_signal_connect(header_middle, "released", G_CALLBACK(header_middle_released), state);
     gtk_widget_add_controller(header, GTK_EVENT_CONTROLLER(header_middle));
     auto *tab_scroll = gtk_event_controller_scroll_new(GTK_EVENT_CONTROLLER_SCROLL_VERTICAL);
+    gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(tab_scroll), GTK_PHASE_CAPTURE);
     g_signal_connect(tab_scroll, "scroll", G_CALLBACK(tab_strip_scrolled), state);
     gtk_widget_add_controller(tab_strip, tab_scroll);
     gtk_window_set_titlebar(GTK_WINDOW(state->window), header);
@@ -2151,14 +2156,11 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     gtk_widget_add_css_class(address_wrap, "address-wrap");
     gtk_widget_set_hexpand(address_wrap, TRUE);
     gtk_overlay_set_child(GTK_OVERLAY(address_wrap), state->address);
-    state->address_popover = gtk_popover_new();
+    state->address_popover = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     gtk_widget_add_css_class(state->address_popover, "address-suggestions");
-    gtk_popover_set_position(GTK_POPOVER(state->address_popover), GTK_POS_BOTTOM);
-    gtk_popover_set_has_arrow(GTK_POPOVER(state->address_popover), FALSE);
-    gtk_popover_set_autohide(GTK_POPOVER(state->address_popover), TRUE);
     state->address_suggestions = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
-    gtk_popover_set_child(GTK_POPOVER(state->address_popover), state->address_suggestions);
-    gtk_widget_set_parent(state->address_popover, state->address);
+    gtk_box_append(GTK_BOX(state->address_popover), state->address_suggestions);
+    gtk_widget_set_visible(state->address_popover, FALSE);
     state->bookmark_button = icon_button("non-starred-symbolic", "Bookmark this tab");
     gtk_widget_add_css_class(state->bookmark_button, "address-bookmark");
     gtk_widget_set_halign(state->bookmark_button, GTK_ALIGN_END);
@@ -2237,6 +2239,12 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     gtk_widget_set_vexpand(page_overlay, TRUE);
     gtk_overlay_set_child(GTK_OVERLAY(page_overlay), state->stack);
     gtk_overlay_add_overlay(GTK_OVERLAY(page_overlay), state->find_bar);
+    gtk_widget_set_halign(state->address_popover, GTK_ALIGN_FILL);
+    gtk_widget_set_valign(state->address_popover, GTK_ALIGN_START);
+    gtk_widget_set_margin_start(state->address_popover, 140);
+    gtk_widget_set_margin_end(state->address_popover, 100);
+    gtk_widget_set_margin_top(state->address_popover, 2);
+    gtk_overlay_add_overlay(GTK_OVERLAY(page_overlay), state->address_popover);
     gtk_box_append(GTK_BOX(layout), navigation);
     gtk_box_append(GTK_BOX(layout), page_overlay);
     gtk_window_set_child(GTK_WINDOW(state->window), layout);
