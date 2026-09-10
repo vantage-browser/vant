@@ -38,6 +38,7 @@ struct TabState {
     GtkWidget *favicon{};
     GtkWidget *spinner{};
     std::string internal_uri;
+    std::string display_uri;
     bool closing{};
     bool hovered{};
     bool user_stopped{};
@@ -82,6 +83,7 @@ struct WindowState {
     unsigned find_current{};
     unsigned find_total{};
     unsigned find_generation{};
+    gint64 address_focused_at{};
     bool custom_find{};
     ~WindowState() { if (private_session) g_object_unref(private_session); }
 };
@@ -104,6 +106,7 @@ std::string format_bytes(std::uint64_t bytes);
 void cancel_download(ApplicationState *owner, std::int64_t id);
 void address_changed(GtkEditable *, WindowState *state);
 std::string html_escape(std::string_view value);
+void print_page(GtkButton *, WindowState *state);
 
 void update_find_count(WindowState *state) {
     const auto label = state->find_total ? std::to_string(state->find_current) + " / " +
@@ -368,6 +371,7 @@ void context_open(GSimpleAction *, GVariant *, void *data) {
         } else tab = new_tab(target, "vantage:new");
         if (tab) {
             tab->internal_uri = "vantage:image";
+            tab->display_uri = open->uri;
             const auto page = "<!doctype html><html><head><meta charset=utf-8><title>Image</title><style>"
                 "html{color-scheme:dark}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#20201f}"
                 "img{display:block;max-width:100%;max-height:100vh;object-fit:contain}</style></head><body><img src='" +
@@ -376,6 +380,91 @@ void context_open(GSimpleAction *, GVariant *, void *data) {
         }
     } else if (open->mode == ContextOpen::tab) new_tab(open->window, open->uri);
     else create_window(open->window->owner, open->uri, false, open->window);
+}
+
+enum class PageActionKind { save, print, source };
+struct PageActionData { TabState *tab{}; PageActionKind kind{}; };
+struct PageSaveData { GtkFileDialog *dialog{}; WebKitWebView *view{}; };
+
+void page_save_finished(GObject *source, GAsyncResult *result, void *data) {
+    auto *save = static_cast<PageSaveData *>(data);
+    GError *error = nullptr;
+    auto *file = gtk_file_dialog_save_finish(GTK_FILE_DIALOG(source), result, &error);
+    if (file) {
+        webkit_web_view_save_to_file(save->view, file, WEBKIT_SAVE_MODE_MHTML, nullptr, nullptr, nullptr);
+        g_object_unref(file);
+    }
+    if (error) g_error_free(error);
+    g_object_unref(save->view);
+    g_object_unref(save->dialog);
+    delete save;
+}
+
+struct SourceData { WindowState *window{}; WebKitWebView *view{}; std::string uri; };
+
+void source_loaded(GObject *source, GAsyncResult *result, void *data) {
+    auto *request = static_cast<SourceData *>(data);
+    GError *error = nullptr;
+    gsize size = 0;
+    auto *bytes = webkit_web_resource_get_data_finish(WEBKIT_WEB_RESOURCE(source), result, &size, &error);
+    if (bytes && !request->window->closed) {
+        auto *encoded = g_base64_encode(bytes, size);
+        const auto base = javascript_string(request->uri);
+        const std::string page = "<!doctype html><html><head><meta charset=utf-8><title>Source</title><style>"
+            "html{color-scheme:dark}body{margin:0;background:#191918;color:#ddd8ce;font:13px/1.55 'JetBrains Mono','DejaVu Sans Mono',monospace}"
+            "header{position:sticky;top:0;padding:12px 18px;background:#252423;border-bottom:1px solid #403e3a;color:#ffb07c}"
+            "pre{margin:0;padding:18px;white-space:pre-wrap;overflow-wrap:anywhere}.comment{color:#85827b}.tag{color:#ff8a62}"
+            ".attr{color:#ffd37a}.string,a{color:#9fd7ff}a:hover{color:#ff8a62}</style></head><body><header>Source: " +
+            html_escape(request->uri) + "</header><pre id=s></pre><script>const raw=new TextDecoder().decode(Uint8Array.from(atob('" + encoded + "'),c=>c.charCodeAt(0))),base=" + base + ";"
+            "const esc=s=>s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));"
+            "function tag(t){let out='',p=0,re=/([\\w:-]+)(\\s*=\\s*)([\"'])(.*?)\\3/g,m;while((m=re.exec(t))){out+=esc(t.slice(p,m.index));"
+            "let n='<span class=\"attr\">'+esc(m[1])+'</span>'+esc(m[2]),v=esc(m[4]);"
+            "if(/^(src|href|action|poster|data-src)$/i.test(m[1])){try{let u=new URL(m[4],base).href;out+=n+'<a target=\"_blank\" href=\"'+esc(u).replace(/\"/g,'&quot;')+'\">'+esc(m[3])+v+esc(m[3])+'</a>'}catch{out+=n+'<span class=\"string\">'+esc(m[3])+v+esc(m[3])+'</span>'}}"
+            "else out+=n+'<span class=\"string\">'+esc(m[3])+v+esc(m[3])+'</span>';p=re.lastIndex}out+=esc(t.slice(p));return out.replace(/(&lt;\\/?)([\\w:-]+)/,'$1<span class=\"tag\">$2</span>')}"
+            "document.getElementById('s').innerHTML=raw.split(/(<!--[\\s\\S]*?-->|<[^>]+>)/g).map(x=>x.startsWith('<!--')?'<span class=comment>'+esc(x)+'</span>':x.startsWith('<')?tag(x):esc(x)).join('');"
+            "</script></body></html>";
+        auto *tab = new_tab(request->window, "vantage:new");
+        tab->internal_uri = "vantage:source";
+        tab->display_uri = "view-source:" + request->uri;
+        webkit_web_view_load_html(tab->view, page.c_str(), request->uri.c_str());
+        g_free(encoded);
+        g_free(bytes);
+    } else if (bytes) g_free(bytes);
+    if (error) g_error_free(error);
+    g_object_unref(request->view);
+    delete request;
+}
+
+void page_action(GSimpleAction *, GVariant *, void *data) {
+    const auto *action = static_cast<const PageActionData *>(data);
+    if (!action->tab || action->tab->closing) return;
+    if (action->kind == PageActionKind::print) {
+        print_page(nullptr, action->tab->window);
+    } else if (action->kind == PageActionKind::save) {
+        auto *dialog = gtk_file_dialog_new();
+        gtk_file_dialog_set_title(dialog, "Save page as");
+        gtk_file_dialog_set_initial_name(dialog, "page.mhtml");
+        auto *save = new PageSaveData{GTK_FILE_DIALOG(g_object_ref(dialog)),
+            WEBKIT_WEB_VIEW(g_object_ref(action->tab->view))};
+        gtk_file_dialog_save(dialog, GTK_WINDOW(action->tab->window->window), nullptr, page_save_finished, save);
+        g_object_unref(dialog);
+    } else {
+        const char *uri = webkit_web_view_get_uri(action->tab->view);
+        auto *resource = webkit_web_view_get_main_resource(action->tab->view);
+        if (!resource || !uri) return;
+        auto *request = new SourceData{action->tab->window,
+            WEBKIT_WEB_VIEW(g_object_ref(action->tab->view)), uri};
+        webkit_web_resource_get_data(resource, nullptr, source_loaded, request);
+    }
+}
+
+void append_page_action(WebKitContextMenu *menu, TabState *tab, const char *label, PageActionKind kind) {
+    auto *action = g_simple_action_new("page-action", nullptr);
+    auto *data = new PageActionData{tab, kind};
+    g_signal_connect_data(action, "activate", G_CALLBACK(page_action), data,
+        [](void *value, GClosure *) { delete static_cast<PageActionData *>(value); }, G_CONNECT_DEFAULT);
+    webkit_context_menu_append(menu, webkit_context_menu_item_new_from_gaction(G_ACTION(action), label, nullptr));
+    g_object_unref(action);
 }
 
 void append_context_open(WebKitContextMenu *menu, WindowState *window, const char *uri,
@@ -393,7 +482,6 @@ gboolean context_menu(WebKitWebView *, WebKitContextMenu *menu,
                       WebKitHitTestResult *hit, TabState *tab) {
     const bool link = webkit_hit_test_result_context_is_link(hit);
     const bool image = webkit_hit_test_result_context_is_image(hit);
-    if (!link && !image) return FALSE;
     webkit_context_menu_remove_all(menu);
     if (link) {
         const char *uri = webkit_hit_test_result_get_link_uri(hit);
@@ -412,6 +500,10 @@ gboolean context_menu(WebKitWebView *, WebKitContextMenu *menu,
         webkit_context_menu_append(menu, webkit_context_menu_item_new_from_stock_action(
             WEBKIT_CONTEXT_MENU_ACTION_COPY_IMAGE_URL_TO_CLIPBOARD));
     }
+    if (link || image) webkit_context_menu_append(menu, webkit_context_menu_item_new_separator());
+    append_page_action(menu, tab, "Save page as…", PageActionKind::save);
+    append_page_action(menu, tab, "Print…", PageActionKind::print);
+    append_page_action(menu, tab, "View page source", PageActionKind::source);
     return FALSE;
 }
 
@@ -603,9 +695,11 @@ TabState *find_tab(WindowState *state, WebKitWebView *view) {
 void load_decision(TabState *tab, const vantage::NavigationDecision &decision) {
     if (decision.kind == vantage::NavigationKind::web) {
         tab->internal_uri.clear();
+        tab->display_uri.clear();
         webkit_web_view_load_uri(tab->view, decision.uri.c_str());
     } else if (decision.kind == vantage::NavigationKind::internal) {
         tab->internal_uri = decision.uri;
+        tab->display_uri.clear();
         const char *icon = decision.uri == "vantage:history" ? "document-open-recent-symbolic" :
             decision.uri == "vantage:downloads" ? "folder-download-symbolic" :
             decision.uri == "vantage:bookmarks" ? "starred-symbolic" :
@@ -676,7 +770,8 @@ void sync_active_chrome(WindowState *state) {
     if (auto *tab = find_tab(state, state->view)) {
         const char *uri = webkit_web_view_get_uri(state->view);
         const std::string shown = tab->internal_uri == "vantage:new" ? "" :
-            (!tab->internal_uri.empty() ? tab->internal_uri : (uri ? uri : ""));
+            (!tab->display_uri.empty() ? tab->display_uri :
+             (!tab->internal_uri.empty() ? tab->internal_uri : (uri ? uri : "")));
         if (!gtk_widget_has_focus(state->address))
             gtk_editable_set_text(GTK_EDITABLE(state->address), shown.c_str());
         const char *title = webkit_web_view_get_title(state->view);
@@ -933,6 +1028,7 @@ gboolean decide_policy(WebKitWebView *view, WebKitPolicyDecision *decision,
     const auto resolved = tab->window->policy.resolve(uri ? uri : "");
     if (resolved.kind == vantage::NavigationKind::web) {
         tab->internal_uri.clear();
+        tab->display_uri.clear();
         return FALSE;
     }
     webkit_policy_decision_ignore(decision);
@@ -1319,7 +1415,10 @@ void address_changed(GtkEditable *editable, WindowState *state) {
         gtk_box_append(GTK_BOX(state->address_suggestions), button);
         if (++shown == 8) break;
     }
-    if (shown) gtk_popover_popup(GTK_POPOVER(state->address_popover));
+    if (shown) {
+        gtk_popover_popup(GTK_POPOVER(state->address_popover));
+        gtk_popover_present(GTK_POPOVER(state->address_popover));
+    }
     else gtk_popover_popdown(GTK_POPOVER(state->address_popover));
 }
 
@@ -1611,7 +1710,15 @@ gboolean select_address_deferred(void *data) {
 }
 
 void address_focus_changed(GtkWidget *widget, GParamSpec *, WindowState *state) {
-    if (gtk_widget_has_focus(widget)) g_idle_add(select_address_deferred, state);
+    if (gtk_widget_has_focus(widget)) {
+        state->address_focused_at = g_get_monotonic_time();
+        g_idle_add(select_address_deferred, state);
+    }
+}
+
+void address_clicked(GtkGestureClick *, int, double, double, WindowState *state) {
+    if (g_get_monotonic_time() - state->address_focused_at <= 200000)
+        g_idle_add(select_address_deferred, state);
 }
 
 TabState *new_tab(WindowState *state, const std::string &uri) {
@@ -1622,8 +1729,9 @@ TabState *new_tab(WindowState *state, const std::string &uri) {
         ? WEBKIT_WEB_VIEW(g_object_new(WEBKIT_TYPE_WEB_VIEW, "network-session", state->private_session, nullptr))
         : WEBKIT_WEB_VIEW(webkit_web_view_new());
     auto *find_style = webkit_user_style_sheet_new(
-        ".vantage-find-match{background:transparent!important;color:#ffd37a!important}"
-        ".vantage-find-match.vantage-find-current{background:transparent!important;color:#ff8a62!important}",
+        ".vantage-find-match{display:contents!important;background:transparent!important;color:#ffd37a!important;"
+        "border:0!important;border-radius:0!important;padding:0!important;margin:0!important;box-shadow:none!important}"
+        ".vantage-find-match.vantage-find-current{display:contents!important;background:transparent!important;color:#ff8a62!important}",
         WEBKIT_USER_CONTENT_INJECT_ALL_FRAMES, WEBKIT_USER_STYLE_LEVEL_USER, nullptr, nullptr);
     webkit_user_content_manager_add_style_sheet(webkit_web_view_get_user_content_manager(tab->view), find_style);
     webkit_user_style_sheet_unref(find_style);
@@ -2033,6 +2141,10 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     g_signal_connect(state->address, "activate", G_CALLBACK(submit_address), state);
     g_signal_connect(state->address, "changed", G_CALLBACK(address_changed), state);
     g_signal_connect(state->address, "notify::has-focus", G_CALLBACK(address_focus_changed), state);
+    auto *address_click = gtk_gesture_click_new();
+    gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(address_click), GTK_PHASE_BUBBLE);
+    g_signal_connect(address_click, "pressed", G_CALLBACK(address_clicked), state);
+    gtk_widget_add_controller(state->address, GTK_EVENT_CONTROLLER(address_click));
     g_signal_connect(state->bookmark_button, "clicked", G_CALLBACK(toggle_bookmark), state);
     g_signal_connect(state->find_entry, "changed", G_CALLBACK(find_changed), state);
     g_signal_connect(state->find_entry, "activate", G_CALLBACK(find_activate), state);
