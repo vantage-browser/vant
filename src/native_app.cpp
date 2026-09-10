@@ -636,7 +636,8 @@ void install_style(GtkWidget *window) {
         ".browser-tab:hover .tab-close, .browser-tab-body.active .tab-close { opacity: 1; }"
         ".browser-tab button:hover { background: transparent; }"
         ".browser-tab .tab-close:hover { background: transparent; color: #ff7657; }"
-        ".new-tab { min-width: 24px; min-height: 24px; margin-left: 3px; }"
+        ".new-tab-slot { min-width: 28px; min-height: 28px; margin-left: 3px; }"
+        ".new-tab { min-width: 24px; min-height: 24px; }"
         ".navigation { background: #2c2c2c; border-bottom: 1px solid #393936; }"
         ".toolbar { padding: 6px 8px; background: #2c2c2c; }"
         ".toolbar button.flat { min-width: 28px; min-height: 28px; padding: 2px; border: 0; border-radius: 7px; background: transparent; color: #d8d4cc; box-shadow: none; }"
@@ -676,10 +677,15 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     auto *tab_strip = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
     gtk_widget_add_css_class(tab_strip, "tab-strip");
     state->tab_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    auto *new_tab_slot = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_add_css_class(new_tab_slot, "new-tab-slot");
     auto *new_button = icon_button("list-add-symbolic", "New tab");
     gtk_widget_add_css_class(new_button, "new-tab");
+    gtk_widget_set_halign(new_button, GTK_ALIGN_CENTER);
+    gtk_widget_set_valign(new_button, GTK_ALIGN_CENTER);
+    gtk_box_append(GTK_BOX(new_tab_slot), new_button);
     gtk_box_append(GTK_BOX(tab_strip), state->tab_box);
-    gtk_box_append(GTK_BOX(tab_strip), new_button);
+    gtk_box_append(GTK_BOX(tab_strip), new_tab_slot);
     gtk_widget_set_hexpand(tab_strip, TRUE);
     gtk_header_bar_pack_start(GTK_HEADER_BAR(header), tab_strip);
     gtk_header_bar_set_title_widget(GTK_HEADER_BAR(header), gtk_label_new(nullptr));
