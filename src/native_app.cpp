@@ -160,10 +160,11 @@ void find_changed(GtkEditable *entry, WindowState *state) {
     webkit_find_controller_search_finish(controller);
     const char *text = gtk_editable_get_text(entry);
     if (!text || !*text) {
-        ++state->find_generation;
+        const auto generation = ++state->find_generation;
         state->custom_find = false;
-        webkit_web_view_evaluate_javascript(state->view,
-            "CSS.highlights?.delete('vantage-find-all');CSS.highlights?.delete('vantage-find-current')",
+        const auto clear_script = "window.__vantageFindGeneration=" + std::to_string(generation) +
+            ";CSS.highlights?.delete('vantage-find-all');CSS.highlights?.delete('vantage-find-current')";
+        webkit_web_view_evaluate_javascript(state->view, clear_script.c_str(),
             -1, nullptr, nullptr, nullptr, nullptr, nullptr);
         state->find_current = state->find_total = 0;
         update_find_count(state);
@@ -171,7 +172,10 @@ void find_changed(GtkEditable *entry, WindowState *state) {
     }
     state->custom_find = false;
     const auto query = javascript_string(text);
-    const std::string script = "(()=>{if(!globalThis.CSS?.highlights||!globalThis.Highlight)return -1;"
+    const auto generation = ++state->find_generation;
+    const std::string script = "(()=>{const generation=" + std::to_string(generation) +
+        ";if((window.__vantageFindGeneration||0)>generation)return -2;window.__vantageFindGeneration=generation;"
+        "if(!globalThis.CSS?.highlights||!globalThis.Highlight)return -1;"
         "CSS.highlights.delete('vantage-find-all');CSS.highlights.delete('vantage-find-current');"
         "const q=" + query + ",needle=q.toLocaleLowerCase(),ranges=[];"
         "const w=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT,{acceptNode(n){"
@@ -180,9 +184,9 @@ void find_changed(GtkEditable *entry, WindowState *state) {
         "for(let n;n=w.nextNode();){const s=n.data.toLocaleLowerCase();for(let i=0;(i=s.indexOf(needle,i))>=0;i+=needle.length){"
         "const r=new Range;r.setStart(n,i);r.setEnd(n,i+needle.length);ranges.push(r)}}"
         "CSS.highlights.set('vantage-find-all',new Highlight(...ranges));window.__vantageFind={ranges,index:0};"
+        "if(window.__vantageFindGeneration!==generation)return -2;"
         "if(ranges.length){CSS.highlights.set('vantage-find-current',new Highlight(ranges[0]));"
         "ranges[0].startContainer.parentElement?.scrollIntoView({block:'center'})}return ranges.length})()";
-    const auto generation = ++state->find_generation;
     auto *evaluation = new FindEvaluation{state, state->view, generation};
     webkit_web_view_evaluate_javascript(state->view, script.c_str(), -1, nullptr, nullptr, nullptr,
         find_evaluated, evaluation);
@@ -217,9 +221,13 @@ void find_previous(GtkButton *, WindowState *state) {
 
 void close_find(GtkButton *, WindowState *state) {
     if (state->view) webkit_find_controller_search_finish(webkit_web_view_get_find_controller(state->view));
-    if (state->view) webkit_web_view_evaluate_javascript(state->view,
-        "CSS.highlights?.delete('vantage-find-all');CSS.highlights?.delete('vantage-find-current')",
-        -1, nullptr, nullptr, nullptr, nullptr, nullptr);
+    if (state->view) {
+        const auto generation = ++state->find_generation;
+        const auto script = "window.__vantageFindGeneration=" + std::to_string(generation) +
+            ";CSS.highlights?.delete('vantage-find-all');CSS.highlights?.delete('vantage-find-current')";
+        webkit_web_view_evaluate_javascript(state->view, script.c_str(), -1, nullptr, nullptr,
+            nullptr, nullptr, nullptr);
+    }
     gtk_widget_set_visible(state->find_bar, FALSE);
     if (state->view) gtk_widget_grab_focus(GTK_WIDGET(state->view));
 }
@@ -780,7 +788,7 @@ gboolean decide_policy(WebKitWebView *view, WebKitPolicyDecision *decision,
     if (!tab->internal_uri.empty() && uri && std::string_view(uri) == "about:blank") return FALSE;
     const std::string_view target = uri ? uri : "";
     const char *current_uri = webkit_web_view_get_uri(view);
-    if (type == WEBKIT_POLICY_DECISION_TYPE_NAVIGATION_ACTION && target == "about:blank" &&
+    if (type == WEBKIT_POLICY_DECISION_TYPE_NAVIGATION_ACTION && target.starts_with("about:") &&
         current_uri && (g_str_has_prefix(current_uri, "http://") || g_str_has_prefix(current_uri, "https://"))) {
         webkit_policy_decision_ignore(decision);
         return TRUE;
@@ -1555,8 +1563,8 @@ TabState *new_tab(WindowState *state, const std::string &uri) {
         ? WEBKIT_WEB_VIEW(g_object_new(WEBKIT_TYPE_WEB_VIEW, "network-session", state->private_session, nullptr))
         : WEBKIT_WEB_VIEW(webkit_web_view_new());
     auto *find_style = webkit_user_style_sheet_new(
-        "::highlight(vantage-find-all){background-color:transparent;color:#ffd37a;text-decoration:underline;text-decoration-color:#ffd37a}"
-        "::highlight(vantage-find-current){background-color:transparent;color:#ff8a62;text-decoration-color:#ff8a62}",
+        "::highlight(vantage-find-all){background-color:transparent!important;color:#ffd37a!important}"
+        "::highlight(vantage-find-current){background-color:transparent!important;color:#ff8a62!important}",
         WEBKIT_USER_CONTENT_INJECT_ALL_FRAMES, WEBKIT_USER_STYLE_LEVEL_USER, nullptr, nullptr);
     webkit_user_content_manager_add_style_sheet(webkit_web_view_get_user_content_manager(tab->view), find_style);
     webkit_user_style_sheet_unref(find_style);
