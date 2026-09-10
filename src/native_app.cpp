@@ -15,6 +15,8 @@ struct WindowState {
     GtkWidget *window{};
     GtkWidget *address{};
     GtkWidget *reload_stop{};
+    GtkWidget *spinner{};
+    GtkWidget *progress{};
     WebKitWebView *view{};
     vantage::NavigationPolicy policy;
     bool smoke{};
@@ -48,6 +50,15 @@ void loading_changed(WebKitWebView *view, GParamSpec *, WindowState *state) {
     gtk_button_set_icon_name(GTK_BUTTON(state->reload_stop),
         loading ? "process-stop-symbolic" : "view-refresh-symbolic");
     gtk_widget_set_tooltip_text(state->reload_stop, loading ? "Stop loading" : "Reload");
+    gtk_widget_set_visible(state->spinner, loading);
+    gtk_widget_set_visible(state->progress, loading);
+    if (loading) gtk_spinner_start(GTK_SPINNER(state->spinner));
+    else gtk_spinner_stop(GTK_SPINNER(state->spinner));
+}
+
+void progress_changed(WebKitWebView *view, GParamSpec *, WindowState *state) {
+    gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(state->progress),
+        webkit_web_view_get_estimated_load_progress(view));
 }
 
 void uri_changed(WebKitWebView *view, GParamSpec *, WindowState *state) {
@@ -111,16 +122,25 @@ void activate(GtkApplication *application, void *user_data) {
     auto *forward = icon_button("go-next-symbolic", "Forward");
     state->reload_stop = icon_button("view-refresh-symbolic", "Reload");
     state->address = gtk_entry_new();
+    state->spinner = gtk_spinner_new();
+    gtk_widget_set_visible(state->spinner, FALSE);
     gtk_widget_set_hexpand(state->address, TRUE);
     gtk_entry_set_placeholder_text(GTK_ENTRY(state->address), "Search or enter address");
     gtk_box_append(GTK_BOX(toolbar), back);
     gtk_box_append(GTK_BOX(toolbar), forward);
     gtk_box_append(GTK_BOX(toolbar), state->reload_stop);
+    gtk_box_append(GTK_BOX(toolbar), state->spinner);
     gtk_box_append(GTK_BOX(toolbar), state->address);
+
+    state->progress = gtk_progress_bar_new();
+    gtk_widget_set_visible(state->progress, FALSE);
+    auto *navigation = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_box_append(GTK_BOX(navigation), toolbar);
+    gtk_box_append(GTK_BOX(navigation), state->progress);
 
     state->view = WEBKIT_WEB_VIEW(webkit_web_view_new());
     gtk_widget_set_vexpand(GTK_WIDGET(state->view), TRUE);
-    gtk_box_append(GTK_BOX(layout), toolbar);
+    gtk_box_append(GTK_BOX(layout), navigation);
     gtk_box_append(GTK_BOX(layout), GTK_WIDGET(state->view));
     gtk_window_set_child(GTK_WINDOW(state->window), layout);
 
@@ -131,6 +151,7 @@ void activate(GtkApplication *application, void *user_data) {
     g_signal_connect(state->view, "notify::uri", G_CALLBACK(uri_changed), state);
     g_signal_connect(state->view, "notify::title", G_CALLBACK(title_changed), state);
     g_signal_connect(state->view, "notify::is-loading", G_CALLBACK(loading_changed), state);
+    g_signal_connect(state->view, "notify::estimated-load-progress", G_CALLBACK(progress_changed), state);
     g_signal_connect(state->view, "decide-policy", G_CALLBACK(decide_policy), state);
     g_signal_connect(state->view, "load-failed-with-tls-errors", G_CALLBACK(tls_failed), state);
 
