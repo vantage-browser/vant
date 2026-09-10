@@ -80,6 +80,8 @@ struct WindowState {
     double progress_fraction{};
     unsigned find_current{};
     unsigned find_total{};
+    unsigned find_generation{};
+    bool custom_find{};
     ~WindowState() { if (private_session) g_object_unref(private_session); }
 };
 
@@ -109,29 +111,96 @@ void update_find_count(WindowState *state) {
 }
 
 void find_counted(WebKitFindController *, guint count, WindowState *state) {
+    if (state->custom_find) return;
     state->find_total = count;
     state->find_current = count ? 1 : 0;
     update_find_count(state);
 }
 
+std::string javascript_string(std::string_view value) {
+    auto *escaped = g_strescape(std::string(value).c_str(), nullptr);
+    std::string result = "\"" + std::string(escaped ? escaped : "") + "\"";
+    g_free(escaped);
+    return result;
+}
+
+struct FindEvaluation { WindowState *state{}; WebKitWebView *view{}; unsigned generation{}; };
+
+void find_evaluated(GObject *source, GAsyncResult *result, void *data) {
+    std::unique_ptr<FindEvaluation> evaluation(static_cast<FindEvaluation *>(data));
+    GError *error = nullptr;
+    auto *value = webkit_web_view_evaluate_javascript_finish(WEBKIT_WEB_VIEW(source), result, &error);
+    if (evaluation->generation != evaluation->state->find_generation ||
+        evaluation->state->view != evaluation->view) {
+        if (value) g_object_unref(value);
+        if (error) g_error_free(error);
+        return;
+    }
+    const int count = value && jsc_value_is_number(value) ? jsc_value_to_int32(value) : -1;
+    if (count >= 0) {
+        evaluation->state->custom_find = true;
+        evaluation->state->find_total = static_cast<unsigned>(count);
+        evaluation->state->find_current = count ? 1U : 0U;
+        update_find_count(evaluation->state);
+    } else {
+        evaluation->state->custom_find = false;
+        const char *query = gtk_editable_get_text(GTK_EDITABLE(evaluation->state->find_entry));
+        constexpr guint32 options = WEBKIT_FIND_OPTIONS_CASE_INSENSITIVE | WEBKIT_FIND_OPTIONS_WRAP_AROUND;
+        auto *controller = webkit_web_view_get_find_controller(evaluation->view);
+        webkit_find_controller_search(controller, query, options, G_MAXUINT);
+        webkit_find_controller_count_matches(controller, query, options, G_MAXUINT);
+    }
+    if (value) g_object_unref(value);
+    if (error) g_error_free(error);
+}
+
 void find_changed(GtkEditable *entry, WindowState *state) {
     if (!state->view) return;
     auto *controller = webkit_web_view_get_find_controller(state->view);
+    webkit_find_controller_search_finish(controller);
     const char *text = gtk_editable_get_text(entry);
     if (!text || !*text) {
-        webkit_find_controller_search_finish(controller);
+        ++state->find_generation;
+        state->custom_find = false;
+        webkit_web_view_evaluate_javascript(state->view,
+            "CSS.highlights?.delete('vantage-find-all');CSS.highlights?.delete('vantage-find-current')",
+            -1, nullptr, nullptr, nullptr, nullptr, nullptr);
         state->find_current = state->find_total = 0;
         update_find_count(state);
         return;
     }
-    constexpr guint32 options = WEBKIT_FIND_OPTIONS_CASE_INSENSITIVE | WEBKIT_FIND_OPTIONS_WRAP_AROUND;
-    webkit_find_controller_search(controller, text, options, G_MAXUINT);
-    webkit_find_controller_count_matches(controller, text, options, G_MAXUINT);
+    state->custom_find = false;
+    const auto query = javascript_string(text);
+    const std::string script = "(()=>{if(!globalThis.CSS?.highlights||!globalThis.Highlight)return -1;"
+        "CSS.highlights.delete('vantage-find-all');CSS.highlights.delete('vantage-find-current');"
+        "const q=" + query + ",needle=q.toLocaleLowerCase(),ranges=[];"
+        "const w=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT,{acceptNode(n){"
+        "const p=n.parentElement;if(!p||/^(SCRIPT|STYLE|NOSCRIPT|TEXTAREA|INPUT)$/.test(p.tagName))return NodeFilter.FILTER_REJECT;"
+        "return n.data.toLocaleLowerCase().includes(needle)?NodeFilter.FILTER_ACCEPT:NodeFilter.FILTER_REJECT}});"
+        "for(let n;n=w.nextNode();){const s=n.data.toLocaleLowerCase();for(let i=0;(i=s.indexOf(needle,i))>=0;i+=needle.length){"
+        "const r=new Range;r.setStart(n,i);r.setEnd(n,i+needle.length);ranges.push(r)}}"
+        "CSS.highlights.set('vantage-find-all',new Highlight(...ranges));window.__vantageFind={ranges,index:0};"
+        "if(ranges.length){CSS.highlights.set('vantage-find-current',new Highlight(ranges[0]));"
+        "ranges[0].startContainer.parentElement?.scrollIntoView({block:'center'})}return ranges.length})()";
+    const auto generation = ++state->find_generation;
+    auto *evaluation = new FindEvaluation{state, state->view, generation};
+    webkit_web_view_evaluate_javascript(state->view, script.c_str(), -1, nullptr, nullptr, nullptr,
+        find_evaluated, evaluation);
+}
+
+void move_custom_find(WindowState *state, int direction) {
+    const std::string script = "(()=>{const f=window.__vantageFind;if(!f?.ranges.length)return;"
+        "f.index=(f.index+" + std::to_string(direction) + "+f.ranges.length)%f.ranges.length;"
+        "const r=f.ranges[f.index];CSS.highlights.set('vantage-find-current',new Highlight(r));"
+        "r.startContainer.parentElement?.scrollIntoView({block:'center'})})()";
+    webkit_web_view_evaluate_javascript(state->view, script.c_str(), -1, nullptr, nullptr, nullptr,
+        nullptr, nullptr);
 }
 
 void find_next(GtkButton *, WindowState *state) {
     if (!state->view || !state->find_total) return;
-    webkit_find_controller_search_next(webkit_web_view_get_find_controller(state->view));
+    if (state->custom_find) move_custom_find(state, 1);
+    else webkit_find_controller_search_next(webkit_web_view_get_find_controller(state->view));
     state->find_current = state->find_current % state->find_total + 1;
     update_find_count(state);
 }
@@ -140,13 +209,17 @@ void find_activate(GtkEntry *, WindowState *state) { find_next(nullptr, state); 
 
 void find_previous(GtkButton *, WindowState *state) {
     if (!state->view || !state->find_total) return;
-    webkit_find_controller_search_previous(webkit_web_view_get_find_controller(state->view));
+    if (state->custom_find) move_custom_find(state, -1);
+    else webkit_find_controller_search_previous(webkit_web_view_get_find_controller(state->view));
     state->find_current = state->find_current <= 1 ? state->find_total : state->find_current - 1;
     update_find_count(state);
 }
 
 void close_find(GtkButton *, WindowState *state) {
     if (state->view) webkit_find_controller_search_finish(webkit_web_view_get_find_controller(state->view));
+    if (state->view) webkit_web_view_evaluate_javascript(state->view,
+        "CSS.highlights?.delete('vantage-find-all');CSS.highlights?.delete('vantage-find-current')",
+        -1, nullptr, nullptr, nullptr, nullptr, nullptr);
     gtk_widget_set_visible(state->find_bar, FALSE);
     if (state->view) gtk_widget_grab_focus(GTK_WIDGET(state->view));
 }
@@ -696,7 +769,7 @@ void title_changed(WebKitWebView *view, GParamSpec *, TabState *tab) {
         gtk_window_set_title(GTK_WINDOW(tab->window->window), title && *title ? title : "Vantage Browser");
 }
 
-gboolean decide_policy(WebKitWebView *, WebKitPolicyDecision *decision,
+gboolean decide_policy(WebKitWebView *view, WebKitPolicyDecision *decision,
                        WebKitPolicyDecisionType type, TabState *tab) {
     if (type != WEBKIT_POLICY_DECISION_TYPE_NAVIGATION_ACTION &&
         type != WEBKIT_POLICY_DECISION_TYPE_NEW_WINDOW_ACTION) return FALSE;
@@ -706,6 +779,12 @@ gboolean decide_policy(WebKitWebView *, WebKitPolicyDecision *decision,
     const char *uri = webkit_uri_request_get_uri(request);
     if (!tab->internal_uri.empty() && uri && std::string_view(uri) == "about:blank") return FALSE;
     const std::string_view target = uri ? uri : "";
+    const char *current_uri = webkit_web_view_get_uri(view);
+    if (type == WEBKIT_POLICY_DECISION_TYPE_NAVIGATION_ACTION && target == "about:blank" &&
+        current_uri && (g_str_has_prefix(current_uri, "http://") || g_str_has_prefix(current_uri, "https://"))) {
+        webkit_policy_decision_ignore(decision);
+        return TRUE;
+    }
     if (type == WEBKIT_POLICY_DECISION_TYPE_NEW_WINDOW_ACTION) {
         webkit_policy_decision_ignore(decision);
         const auto resolved_window = tab->window->policy.resolve(target);
@@ -767,11 +846,20 @@ gboolean decide_policy(WebKitWebView *, WebKitPolicyDecision *decision,
                 } else if (target.starts_with("vantage:download-show")) {
                     if (!found->destination.empty()) {
                         const auto folder = std::filesystem::path(found->destination).parent_path();
-                        auto *folder_uri = g_filename_to_uri(folder.c_str(), nullptr, nullptr);
-                        if (folder_uri) {
-                            g_app_info_launch_default_for_uri(folder_uri, nullptr, nullptr);
-                            g_free(folder_uri);
+                        GError *launch_error = nullptr;
+                        auto *nautilus = g_find_program_in_path("nautilus");
+                        auto *process = nautilus ? g_subprocess_new(G_SUBPROCESS_FLAGS_NONE, &launch_error,
+                            nautilus, "--new-window", folder.c_str(), nullptr) : nullptr;
+                        if (process) g_object_unref(process);
+                        if (!process) {
+                            if (launch_error) g_clear_error(&launch_error);
+                            auto *folder_uri = g_filename_to_uri(folder.c_str(), nullptr, nullptr);
+                            if (folder_uri) {
+                                g_app_info_launch_default_for_uri(folder_uri, nullptr, nullptr);
+                                g_free(folder_uri);
+                            }
                         }
+                        g_free(nautilus);
                     }
                 }
             }
@@ -1411,8 +1499,11 @@ void draw_toolbar_icon(GtkDrawingArea *, cairo_t *cr, int width, int height, voi
     cairo_stroke(cr);
     const double tip_x = cx + 6.0 * std::cos(end_angle);
     const double tip_y = cy + 6.0 * std::sin(end_angle);
-    const double tangent_x = -std::sin(end_angle);
-    const double tangent_y = std::cos(end_angle);
+    constexpr double arrow_rotation = -G_PI / 8.0;
+    const double arc_tangent_x = -std::sin(end_angle);
+    const double arc_tangent_y = std::cos(end_angle);
+    const double tangent_x = arc_tangent_x * std::cos(arrow_rotation) - arc_tangent_y * std::sin(arrow_rotation);
+    const double tangent_y = arc_tangent_x * std::sin(arrow_rotation) + arc_tangent_y * std::cos(arrow_rotation);
     const double base_x = tip_x - 4.0 * tangent_x;
     const double base_y = tip_y - 4.0 * tangent_y;
     const double normal_x = -tangent_y;
@@ -1464,8 +1555,8 @@ TabState *new_tab(WindowState *state, const std::string &uri) {
         ? WEBKIT_WEB_VIEW(g_object_new(WEBKIT_TYPE_WEB_VIEW, "network-session", state->private_session, nullptr))
         : WEBKIT_WEB_VIEW(webkit_web_view_new());
     auto *find_style = webkit_user_style_sheet_new(
-        "::search-text{background:transparent!important;color:#ffd37a!important;text-decoration:underline;text-decoration-color:#ffd37a}"
-        "::search-text:current{background:transparent!important;color:#ff8a62!important;text-decoration-color:#ff8a62}",
+        "::highlight(vantage-find-all){background-color:transparent;color:#ffd37a;text-decoration:underline;text-decoration-color:#ffd37a}"
+        "::highlight(vantage-find-current){background-color:transparent;color:#ff8a62;text-decoration-color:#ff8a62}",
         WEBKIT_USER_CONTENT_INJECT_ALL_FRAMES, WEBKIT_USER_STYLE_LEVEL_USER, nullptr, nullptr);
     webkit_user_content_manager_add_style_sheet(webkit_web_view_get_user_content_manager(tab->view), find_style);
     webkit_user_style_sheet_unref(find_style);
