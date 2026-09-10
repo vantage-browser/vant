@@ -77,6 +77,13 @@ gboolean finish_smoke(void *data) {
     return G_SOURCE_REMOVE;
 }
 
+GtkWidget *icon_button(const char *icon, const char *tooltip) {
+    auto *button = gtk_button_new_from_icon_name(icon);
+    gtk_widget_add_css_class(button, "flat");
+    gtk_widget_set_tooltip_text(button, tooltip);
+    return button;
+}
+
 void activate(GtkApplication *application, void *user_data) {
     auto *state = static_cast<WindowState *>(user_data);
     state->application = application;
@@ -90,10 +97,10 @@ void activate(GtkApplication *application, void *user_data) {
     gtk_widget_set_margin_end(toolbar, 8);
     gtk_widget_set_margin_top(toolbar, 8);
     gtk_widget_set_margin_bottom(toolbar, 8);
-    auto *back = gtk_button_new_with_label("Back");
-    auto *forward = gtk_button_new_with_label("Forward");
-    auto *reload_button = gtk_button_new_with_label("Reload");
-    auto *stop_button = gtk_button_new_with_label("Stop");
+    auto *back = icon_button("go-previous-symbolic", "Back");
+    auto *forward = icon_button("go-next-symbolic", "Forward");
+    auto *reload_button = icon_button("view-refresh-symbolic", "Reload");
+    auto *stop_button = icon_button("process-stop-symbolic", "Stop loading");
     state->address = gtk_entry_new();
     gtk_widget_set_hexpand(state->address, TRUE);
     gtk_entry_set_placeholder_text(GTK_ENTRY(state->address), "Search or enter address");
