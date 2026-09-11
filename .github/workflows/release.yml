@@ -1,0 +1,50 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  source-release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Validate tag and source version
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_version=$(sed -n 's/.*version = "\([^"]*\)".*/\1/p' src/version.h)
+          test -n "$source_version"
+          test "${GITHUB_REF_NAME}" = "v${source_version}"
+          test "$(git rev-parse HEAD)" = "$(git rev-list -n 1 "${GITHUB_REF_NAME}")"
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config python3 libgtk-4-dev libwebkitgtk-6.0-dev libsqlite3-dev
+      - name: Verify release candidate
+        run: |
+          make vendor-integrity
+          make test
+          make test-sanitize
+          test "$(./build/vant --version)" = "Vantage Browser ${GITHUB_REF_NAME#v}"
+      - name: Build immutable source artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          git archive --format=tar --prefix="vant-${version}/" HEAD | gzip -n > vant-source.tar.gz
+          printf '%s\n' "$GITHUB_REF_NAME" > version.txt
+          sha256sum vant-source.tar.gz version.txt > checksums.txt
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME"
+          vant-source.tar.gz version.txt checksums.txt
+          --verify-tag --generate-notes
+          --title "Vantage Browser $GITHUB_REF_NAME"

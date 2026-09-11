@@ -14,7 +14,7 @@ JSPP_DIR := third_party/jspp
 JSPP_SOURCES := $(filter-out $(JSPP_DIR)/src/main.cpp,$(wildcard $(JSPP_DIR)/src/*.cpp))
 JSPP_OBJECTS := $(JSPP_SOURCES:$(JSPP_DIR)/src/%.cpp=$(BUILD)/jspp/%.o)
 
-.PHONY: all deps test test-unit test-sanitize smoke smoke-native benchmark evidence clean
+.PHONY: all deps test test-unit test-sanitize smoke smoke-native benchmark evidence vendor-check vendor-integrity clean
 all: deps $(BUILD)/vant
 
 deps:
@@ -120,6 +120,9 @@ test-sanitize: deps
 
 vendor-check:
 	python3 tools/vendor_jspp.py --check
+
+vendor-integrity:
+	python3 tools/check_vendor_integrity.py
 
 evidence: deps all
 	python3 tools/record_environment.py --output $(BUILD)/environment.json

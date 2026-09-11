@@ -6,7 +6,7 @@ WebKitGTK renders untrusted web content. A pinned copy of JS++ provides a
 separate, capability-limited automation runtime and is never used to execute
 page JavaScript.
 
-This is a development preview, not a daily-use or security-ready release. The
+Version 0.1.0 is an early public preview, not a security-hardened release. The
 native shell currently provides tabs, navigation controls, persistent bookmarks,
 searchable history and downloads, private windows, printing, zoom controls and
 familiar Chromium-style keyboard shortcuts. Bookmarks can be added, edited and
@@ -130,6 +130,11 @@ make clean
 
 Desktop integration files are retained under `packaging/`. Public installation
 and user documentation live at [vant.cx](https://vant.cx).
+
+Tagged releases publish an immutable source archive and checksums. The public
+installer verifies that archive and builds Vantage against the target system's
+GTK, WebKitGTK and multimedia libraries; Vantage does not claim that one generic
+Linux binary is portable across distributions.
 
 The architecture, security boundary, checkpoint status and release procedure
 are maintained in [HANDOVER.md](HANDOVER.md). More focused notes live under

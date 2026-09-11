@@ -1,6 +1,7 @@
 #include "application.h"
 #include "native_app.h"
 #include "preferences.h"
+#include "version.h"
 
 #include <exception>
 #include <iostream>
@@ -9,8 +10,6 @@
 #include <string_view>
 
 namespace {
-constexpr std::string_view version = "0.0.0-dev";
-
 void usage(std::ostream &out) {
     out << "usage: vant [URL]\n"
         << "       vant [--compatibility-video-rendering|--accelerated-video-rendering] [URL]\n"
@@ -38,7 +37,7 @@ int main(int argc, char **argv) {
         }
     }
     if (argc == 2 && std::string_view(argv[1]) == "--version") {
-        std::cout << "Vantage Browser " << version << '\n';
+        std::cout << "Vantage Browser " << vantage::version << '\n';
         return 0;
     }
     if (argc == 2 && std::string_view(argv[1]) == "--help") {

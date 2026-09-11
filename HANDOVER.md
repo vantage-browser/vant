@@ -6,9 +6,9 @@ Ubuntu/Omarchy on Wayland. The product goal is a genuinely useful daily browser
 with a smaller operational footprint and a calmer interface than a general
 purpose Chromium distribution.
 
-This repository is pre-implementation. Nothing described below is shipped,
-supported, secure, standards-compatible or release-ready until its checkpoint is
-implemented and backed by retained evidence.
+Version 0.1.0 is the first public preview. Only behavior backed by implemented
+code and retained evidence is shipped; broader support, security, compatibility
+and performance claims remain prohibited until their checkpoints are accepted.
 
 ## Product identity
 
