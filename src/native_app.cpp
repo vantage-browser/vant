@@ -74,7 +74,7 @@ struct WindowState {
     GtkWidget *downloads_icon{};
     GtkWidget *downloads_spinner{};
     GtkWidget *tab_box{};
-    GtkWidget *tab_scroller{};
+    GtkWidget *tab_strip{};
     GtkWidget *new_tab_button{};
     GtkWidget *stack{};
     GtkWidget *new_tab_backdrop{};
@@ -828,13 +828,44 @@ void show_site_certificate(GtkButton *, WindowState *state) {
         g_object_get(certificate, "subject-name", &subject, nullptr);
     if (g_object_class_find_property(G_OBJECT_GET_CLASS(certificate), "issuer-name"))
         g_object_get(certificate, "issuer-name", &issuer, nullptr);
-    const std::string detail = "Subject: " + std::string(subject ? subject : "Unavailable") +
-        "\nIssuer: " + std::string(issuer ? issuer : "Unavailable") +
-        "\nStatus: " + (errors == 0 ? std::string("Valid") : std::string("Certificate errors detected"));
-    auto *dialog = gtk_alert_dialog_new("Certificate information");
-    gtk_alert_dialog_set_detail(dialog, detail.c_str());
-    gtk_alert_dialog_show(dialog, GTK_WINDOW(state->window));
-    g_object_unref(dialog);
+    gtk_menu_button_popdown(GTK_MENU_BUTTON(state->site_button));
+    auto *dialog = gtk_window_new();
+    gtk_window_set_title(GTK_WINDOW(dialog), "Certificate information");
+    gtk_window_set_transient_for(GTK_WINDOW(dialog), GTK_WINDOW(state->window));
+    gtk_window_set_modal(GTK_WINDOW(dialog), TRUE);
+    gtk_window_set_resizable(GTK_WINDOW(dialog), FALSE);
+    gtk_window_set_destroy_with_parent(GTK_WINDOW(dialog), TRUE);
+    gtk_window_set_default_size(GTK_WINDOW(dialog), 460, -1);
+    auto *card = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
+    gtk_widget_add_css_class(card, "certificate-card");
+    auto *heading = gtk_label_new("Certificate information");
+    gtk_widget_add_css_class(heading, "certificate-heading");
+    gtk_widget_set_halign(heading, GTK_ALIGN_START);
+    gtk_box_append(GTK_BOX(card), heading);
+    auto append_detail = [card](const char *name, const char *value) {
+        auto *row = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+        auto *label = gtk_label_new(name);
+        gtk_widget_add_css_class(label, "certificate-label");
+        gtk_widget_set_halign(label, GTK_ALIGN_START);
+        auto *detail = gtk_label_new(value);
+        gtk_widget_add_css_class(detail, "certificate-value");
+        gtk_widget_set_halign(detail, GTK_ALIGN_START);
+        gtk_label_set_wrap(GTK_LABEL(detail), TRUE);
+        gtk_label_set_selectable(GTK_LABEL(detail), TRUE);
+        gtk_box_append(GTK_BOX(row), label);
+        gtk_box_append(GTK_BOX(row), detail);
+        gtk_box_append(GTK_BOX(card), row);
+    };
+    append_detail("Subject", subject ? subject : "Unavailable");
+    append_detail("Issuer", issuer ? issuer : "Unavailable");
+    append_detail("Status", errors == 0 ? "Valid" : "Certificate errors detected");
+    auto *close = gtk_button_new_with_label("Close");
+    gtk_widget_add_css_class(close, "certificate-close");
+    gtk_widget_set_halign(close, GTK_ALIGN_END);
+    g_signal_connect_swapped(close, "clicked", G_CALLBACK(gtk_window_destroy), dialog);
+    gtk_box_append(GTK_BOX(card), close);
+    gtk_window_set_child(GTK_WINDOW(dialog), card);
+    gtk_window_present(GTK_WINDOW(dialog));
     g_free(subject);
     g_free(issuer);
 }
@@ -1189,27 +1220,19 @@ gboolean load_failed(WebKitWebView *view, WebKitLoadEvent, const char *failing_u
     return TRUE;
 }
 
-struct RevealTabData { WindowState *state{}; WebKitWebView *view{}; };
+void update_tab_widths(WindowState *state) {
+    if (!state->tab_strip || state->tabs.empty()) return;
+    const int strip_width = gtk_widget_get_width(state->tab_strip);
+    const int measured_new_tab_width = state->new_tab_button ? gtk_widget_get_width(state->new_tab_button) : 0;
+    const int new_tab_width = measured_new_tab_width > 0 ? measured_new_tab_width : 32;
+    if (strip_width <= new_tab_width) return;
+    const int available = std::max(1, strip_width - new_tab_width - 4);
+    const int width = std::min(184, std::max(1, available / static_cast<int>(state->tabs.size())));
+    for (const auto &tab : state->tabs) gtk_widget_set_size_request(tab->tab, width, 38);
+}
 
-gboolean reveal_tab_deferred(void *data) {
-    std::unique_ptr<RevealTabData> reveal(static_cast<RevealTabData *>(data));
-    auto *tab = !reveal->state->closed ? find_tab(reveal->state, reveal->view) : nullptr;
-    if (tab && reveal->state->tab_scroller) {
-        graphene_rect_t bounds;
-        if (gtk_widget_compute_bounds(tab->tab, reveal->state->tab_box, &bounds)) {
-            auto *adjustment = gtk_scrolled_window_get_hadjustment(GTK_SCROLLED_WINDOW(reveal->state->tab_scroller));
-            const double current = gtk_adjustment_get_value(adjustment);
-            const double page = gtk_adjustment_get_page_size(adjustment);
-            const double left = bounds.origin.x;
-            double right = left + bounds.size.width;
-            if (!reveal->state->tabs.empty() && reveal->state->tabs.back().get() == tab &&
-                reveal->state->new_tab_button) right += gtk_widget_get_width(reveal->state->new_tab_button);
-            if (left < current) gtk_adjustment_set_value(adjustment, left);
-            else if (right > current + page) gtk_adjustment_set_value(adjustment, right - page);
-        }
-    }
-    g_object_unref(reveal->view);
-    return G_SOURCE_REMOVE;
+void tab_strip_width_changed(GObject *, GParamSpec *, WindowState *state) {
+    update_tab_widths(state);
 }
 
 void select_tab(TabState *tab) {
@@ -1227,8 +1250,6 @@ void select_tab(TabState *tab) {
         gtk_widget_queue_draw(candidate->backdrop);
     }
     sync_active_chrome(state);
-    g_idle_add(reveal_tab_deferred, new RevealTabData{state,
-        WEBKIT_WEB_VIEW(g_object_ref(tab->view))});
     if (gtk_widget_get_visible(state->find_bar)) find_changed(GTK_EDITABLE(state->find_entry), state);
 }
 
@@ -1348,6 +1369,7 @@ void close_tab(TabState *tab) {
     } else if (was_active) {
         select_tab(state->tabs[std::min(index, state->tabs.size() - 1)].get());
     }
+    update_tab_widths(state);
 }
 
 gboolean close_tab_deferred(void *data) {
@@ -1536,6 +1558,7 @@ void hide_address_suggestions(WindowState *state) {
 
 void show_address_suggestions(WindowState *state) {
     gtk_popover_popup(GTK_POPOVER(state->address_popover));
+    gtk_popover_present(GTK_POPOVER(state->address_popover));
 }
 
 void history_suggestion_clicked(GtkButton *button, WindowState *state) {
@@ -1563,8 +1586,9 @@ gboolean suggestion_key_pressed(GtkEventControllerKey *, guint key, guint, GdkMo
 
 gboolean address_key_pressed(GtkEventControllerKey *, guint key, guint, GdkModifierType modifiers,
                              WindowState *state) {
-    if (key == GDK_KEY_Tab) {
-        gtk_widget_grab_focus((modifiers & GDK_SHIFT_MASK) != 0 ? state->site_button : state->bookmark_button);
+    if (key == GDK_KEY_Tab || key == GDK_KEY_ISO_Left_Tab) {
+        const bool reverse = key == GDK_KEY_ISO_Left_Tab || (modifiers & GDK_SHIFT_MASK) != 0;
+        gtk_widget_grab_focus(reverse ? state->site_button : state->bookmark_button);
         return TRUE;
     }
     if (key != GDK_KEY_Down || !gtk_widget_get_visible(state->address_popover)) return FALSE;
@@ -1583,9 +1607,9 @@ void address_key_released(GtkEventControllerKey *, guint, guint, GdkModifierType
 
 gboolean toolbar_focus_key(GtkEventControllerKey *controller, guint key, guint,
                            GdkModifierType modifiers, WindowState *state) {
-    if (key != GDK_KEY_Tab) return FALSE;
+    if (key != GDK_KEY_Tab && key != GDK_KEY_ISO_Left_Tab) return FALSE;
     auto *widget = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(controller));
-    const bool reverse = (modifiers & GDK_SHIFT_MASK) != 0;
+    const bool reverse = key == GDK_KEY_ISO_Left_Tab || (modifiers & GDK_SHIFT_MASK) != 0;
     if (widget == state->reload_stop && !reverse) {
         gtk_widget_grab_focus(state->site_button);
         return TRUE;
@@ -2025,6 +2049,7 @@ TabState *new_tab(WindowState *state, const std::string &uri, bool load_initial)
         G_CALLBACK(find_counted), state);
 
     state->tabs.push_back(std::move(owned));
+    update_tab_widths(state);
     select_tab(tab);
     auto *session = webkit_web_view_get_network_session(tab->view);
     auto *data_manager = webkit_network_session_get_website_data_manager(session);
@@ -2123,14 +2148,14 @@ void install_style(GtkWidget *window) {
     auto *provider = gtk_css_provider_new();
     gtk_css_provider_load_from_string(provider,
         "window { background: #171716; color: #ece8df; }"
-        "headerbar { min-height: 34px; padding: 0 6px; background: #242423; box-shadow: inset 0 -1px #393936; border: 0; }"
-        "headerbar.private-header { background: #2d2927; }"
+        ".vantage-titlebar { min-height: 44px; padding: 0 6px; background: #242423; box-shadow: inset 0 -1px #393936; border: 0; }"
+        ".vantage-titlebar.private-header { background: #2d2927; }"
         ".tab-strip { margin-top: 2px; }"
-        ".browser-tab { min-width: 184px; margin-right: 0; background: transparent; }"
+        ".browser-tab { min-width: 0; margin-right: 0; background: transparent; }"
         ".browser-tab-body { background: transparent; }"
         ".tab-hover-surface { min-height: 24px; margin: 3px 9px 1px; border-radius: 7px; background: transparent; }"
         ".browser-tab button { min-height: 22px; padding: 0 7px; border: 0; outline: none; background: transparent; box-shadow: none; color: #d8d4cc; }"
-        ".browser-tab .tab-select { min-width: 112px; }"
+        ".browser-tab .tab-select { min-width: 0; }"
         ".browser-tab .tab-close { min-width: 20px; padding: 0 4px; opacity: 0; }"
         ".browser-tab:hover .tab-close, .browser-tab-body.active .tab-close { opacity: 1; }"
         ".browser-tab button:hover { background: transparent; }"
@@ -2155,6 +2180,12 @@ void install_style(GtkWidget *window) {
         ".site-information-popover .site-detail { color: #bbb6ac; }"
         ".site-information-popover button { padding: 7px 5px; border: 0; border-radius: 6px; background: transparent; color: #eee9df; box-shadow: none; }"
         ".site-information-popover button:hover { background: #474642; color: #ff9a76; }"
+        ".certificate-card { padding: 22px; background: #242321; color: #eee9df; }"
+        ".certificate-heading { font-size: 20px; font-weight: 650; color: #f5f0e6; }"
+        ".certificate-label { font-size: 11px; font-weight: 700; color: #ff9a76; }"
+        ".certificate-value { color: #cbc6bc; }"
+        ".certificate-close { padding: 7px 18px; border: 1px solid #55514b; border-radius: 7px; background: #353330; color: #f2ede3; box-shadow: none; }"
+        ".certificate-close:hover { border-color: #ff9a76; color: #ff9a76; }"
         ".main-menu contents { padding: 8px; border: 1px solid #474641; border-radius: 12px; background: #2c2c2c; }"
         ".main-menu .menu-item { padding: 8px 10px; border: 0; border-radius: 7px; background: transparent; color: #eee9df; box-shadow: none; }"
         ".main-menu .menu-item:hover { background: #474642; }"
@@ -2206,18 +2237,15 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     gtk_window_set_default_size(GTK_WINDOW(state->window),
         source_width > 0 ? source_width : 1100, source_height > 0 ? source_height : 760);
 
-    auto *header = gtk_header_bar_new();
-    if (private_mode) gtk_widget_add_css_class(header, "private-header");
-    gtk_header_bar_set_show_title_buttons(GTK_HEADER_BAR(header), TRUE);
+    auto *header = gtk_window_handle_new();
+    auto *header_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_add_css_class(header_row, "vantage-titlebar");
+    if (private_mode) gtk_widget_add_css_class(header_row, "private-header");
+    gtk_window_handle_set_child(GTK_WINDOW_HANDLE(header), header_row);
     auto *tab_strip = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    state->tab_strip = tab_strip;
     gtk_widget_add_css_class(tab_strip, "tab-strip");
     state->tab_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
-    state->tab_scroller = gtk_scrolled_window_new();
-    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(state->tab_scroller),
-        GTK_POLICY_EXTERNAL, GTK_POLICY_NEVER);
-    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(state->tab_scroller), state->tab_box);
-    gtk_widget_set_size_request(state->tab_scroller, 184, -1);
-    gtk_widget_set_hexpand(state->tab_scroller, TRUE);
     auto *new_button = gtk_button_new();
     state->new_tab_button = new_button;
     gtk_widget_add_css_class(new_button, "flat");
@@ -2241,12 +2269,15 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     g_signal_connect(new_tab_motion, "enter", G_CALLBACK(new_tab_pointer_entered), state);
     g_signal_connect(new_tab_motion, "leave", G_CALLBACK(new_tab_pointer_left), state);
     gtk_widget_add_controller(new_button, new_tab_motion);
-    gtk_box_append(GTK_BOX(state->tab_box), new_button);
-    gtk_box_append(GTK_BOX(tab_strip), state->tab_scroller);
+    gtk_box_append(GTK_BOX(tab_strip), state->tab_box);
+    gtk_box_append(GTK_BOX(tab_strip), new_button);
     gtk_widget_set_hexpand(tab_strip, TRUE);
     gtk_widget_set_halign(tab_strip, GTK_ALIGN_FILL);
-    gtk_header_bar_pack_start(GTK_HEADER_BAR(header), tab_strip);
-    gtk_header_bar_set_title_widget(GTK_HEADER_BAR(header), gtk_label_new(""));
+    gtk_box_append(GTK_BOX(header_row), tab_strip);
+    auto *window_controls = gtk_window_controls_new(GTK_PACK_END);
+    gtk_widget_set_valign(window_controls, GTK_ALIGN_CENTER);
+    gtk_box_append(GTK_BOX(header_row), window_controls);
+    g_signal_connect(tab_strip, "notify::width", G_CALLBACK(tab_strip_width_changed), state);
     auto *header_middle = gtk_gesture_click_new();
     gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(header_middle), GDK_BUTTON_MIDDLE);
     gtk_gesture_single_set_exclusive(GTK_GESTURE_SINGLE(header_middle), TRUE);
@@ -2333,7 +2364,9 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     state->address_suggestions = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
     gtk_widget_set_size_request(state->address_suggestions, 620, -1);
     gtk_popover_set_child(GTK_POPOVER(state->address_popover), state->address_suggestions);
-    gtk_widget_set_parent(state->address_popover, address_wrap);
+    gtk_widget_set_halign(state->address_popover, GTK_ALIGN_FILL);
+    gtk_widget_set_valign(state->address_popover, GTK_ALIGN_END);
+    gtk_overlay_add_overlay(GTK_OVERLAY(address_wrap), state->address_popover);
     state->bookmark_button = icon_button("non-starred-symbolic", "Bookmark this tab");
     gtk_widget_add_css_class(state->bookmark_button, "address-bookmark");
     gtk_widget_set_halign(state->bookmark_button, GTK_ALIGN_END);
