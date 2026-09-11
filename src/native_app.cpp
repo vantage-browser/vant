@@ -65,6 +65,7 @@ struct WindowState {
     GtkWidget *site_connection{};
     GtkWidget *site_certificate{};
     GtkWidget *site_data{};
+    GtkWidget *site_clear{};
     GtkWidget *menu_button{};
     GtkWidget *downloads_button{};
     GtkWidget *downloads_popover{};
@@ -778,23 +779,90 @@ void reload_or_stop(GtkButton *, WindowState *state) {
     else webkit_web_view_reload(state->view);
 }
 
+std::string active_site_uri(WindowState *state) {
+    if (!state->view) return {};
+    if (auto *tab = find_tab(state, state->view); tab && tab->internal_uri == "vantage:source" &&
+        tab->display_uri.starts_with("source:")) return tab->display_uri.substr(7);
+    const char *uri = webkit_web_view_get_uri(state->view);
+    return uri ? uri : "";
+}
+
+void site_cookies_loaded(GObject *source, GAsyncResult *result, gpointer data) {
+    auto *state = static_cast<WindowState *>(data);
+    GError *error = nullptr;
+    auto *cookies = webkit_cookie_manager_get_cookies_finish(WEBKIT_COOKIE_MANAGER(source), result, &error);
+    unsigned removed = 0;
+    for (auto *item = cookies; item; item = item->next) {
+        webkit_cookie_manager_delete_cookie(WEBKIT_COOKIE_MANAGER(source),
+            static_cast<SoupCookie *>(item->data), nullptr, nullptr, nullptr);
+        ++removed;
+    }
+    g_list_free_full(cookies, [](gpointer value) {
+        soup_cookie_free(static_cast<SoupCookie *>(value));
+    });
+    if (error) {
+        gtk_label_set_text(GTK_LABEL(state->site_data), "Could not clear cookies and site data");
+        g_error_free(error);
+    } else {
+        const auto message = removed ? std::to_string(removed) +
+            (removed == 1 ? " cookie cleared" : " cookies cleared") : "No cookies stored for this site";
+        gtk_label_set_text(GTK_LABEL(state->site_data), message.c_str());
+    }
+}
+
+void clear_site_cookies(GtkButton *, WindowState *state) {
+    const auto uri = active_site_uri(state);
+    if (!uri.starts_with("http://") && !uri.starts_with("https://")) return;
+    auto *session = webkit_web_view_get_network_session(state->view);
+    auto *manager = webkit_network_session_get_cookie_manager(session);
+    webkit_cookie_manager_get_cookies(manager, uri.c_str(), nullptr, site_cookies_loaded, state);
+}
+
+void show_site_certificate(GtkButton *, WindowState *state) {
+    GTlsCertificate *certificate = nullptr;
+    GTlsCertificateFlags errors = static_cast<GTlsCertificateFlags>(0);
+    if (!state->view || !webkit_web_view_get_tls_info(state->view, &certificate, &errors) || !certificate) return;
+    gchar *subject = nullptr;
+    gchar *issuer = nullptr;
+    if (g_object_class_find_property(G_OBJECT_GET_CLASS(certificate), "subject-name"))
+        g_object_get(certificate, "subject-name", &subject, nullptr);
+    if (g_object_class_find_property(G_OBJECT_GET_CLASS(certificate), "issuer-name"))
+        g_object_get(certificate, "issuer-name", &issuer, nullptr);
+    const std::string detail = "Subject: " + std::string(subject ? subject : "Unavailable") +
+        "\nIssuer: " + std::string(issuer ? issuer : "Unavailable") +
+        "\nStatus: " + (errors == 0 ? std::string("Valid") : std::string("Certificate errors detected"));
+    auto *dialog = gtk_alert_dialog_new("Certificate information");
+    gtk_alert_dialog_set_detail(dialog, detail.c_str());
+    gtk_alert_dialog_show(dialog, GTK_WINDOW(state->window));
+    g_object_unref(dialog);
+    g_free(subject);
+    g_free(issuer);
+}
+
 void update_site_information(WindowState *state, const std::string &uri) {
+    const bool source = uri.starts_with("source:");
+    const std::string effective_uri = source ? uri.substr(7) : uri;
     std::string host = "This page";
-    bool secure = uri.starts_with("https://");
-    if (auto *parsed = g_uri_parse(uri.c_str(), G_URI_FLAGS_NONE, nullptr)) {
+    bool secure = effective_uri.starts_with("https://");
+    if (auto *parsed = g_uri_parse(effective_uri.c_str(), G_URI_FLAGS_NONE, nullptr)) {
         if (const char *value = g_uri_get_host(parsed); value && *value) host = value;
         g_uri_unref(parsed);
     }
-    gtk_label_set_text(GTK_LABEL(state->site_title), host.c_str());
+    gtk_label_set_text(GTK_LABEL(state->site_title), source ? "Source" : host.c_str());
     gtk_label_set_text(GTK_LABEL(state->site_connection),
+        source ? "You're viewing the source of a web page" :
         secure ? "Connection is secure" : "Connection is not secure");
-    gtk_label_set_text(GTK_LABEL(state->site_certificate),
-        secure ? "Certificate verified by WebKitGTK" : "No secure certificate");
+    gtk_button_set_label(GTK_BUTTON(state->site_certificate),
+        secure ? "View certificate" : "No secure certificate");
     gtk_label_set_text(GTK_LABEL(state->site_data), state->private_mode ?
         "Cookies and site data · cleared when this private window closes" :
         "Cookies and site data · managed for this site");
-    gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(state->site_button),
-        secure ? "security-high-symbolic" : "dialog-warning-symbolic");
+    gtk_widget_set_sensitive(state->site_certificate, secure);
+    gtk_widget_set_visible(state->site_certificate, !source);
+    gtk_widget_set_visible(state->site_data, !source);
+    gtk_widget_set_visible(state->site_clear, !source);
+    gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(state->site_button), source ?
+        "dialog-information-symbolic" : secure ? "security-high-symbolic" : "dialog-warning-symbolic");
 }
 
 void sync_active_chrome(WindowState *state) {
@@ -1496,7 +1564,7 @@ gboolean suggestion_key_pressed(GtkEventControllerKey *, guint key, guint, GdkMo
 gboolean address_key_pressed(GtkEventControllerKey *, guint key, guint, GdkModifierType modifiers,
                              WindowState *state) {
     if (key == GDK_KEY_Tab) {
-        gtk_widget_grab_focus((modifiers & GDK_SHIFT_MASK) != 0 ? state->reload_stop : state->bookmark_button);
+        gtk_widget_grab_focus((modifiers & GDK_SHIFT_MASK) != 0 ? state->site_button : state->bookmark_button);
         return TRUE;
     }
     if (key != GDK_KEY_Down || !gtk_widget_get_visible(state->address_popover)) return FALSE;
@@ -1507,12 +1575,26 @@ gboolean address_key_pressed(GtkEventControllerKey *, guint key, guint, GdkModif
     return FALSE;
 }
 
+void address_key_released(GtkEventControllerKey *, guint, guint, GdkModifierType,
+                          WindowState *state) {
+    const char *text = gtk_editable_get_text(GTK_EDITABLE(state->address));
+    if (text && *text) address_changed(GTK_EDITABLE(state->address), state);
+}
+
 gboolean toolbar_focus_key(GtkEventControllerKey *controller, guint key, guint,
                            GdkModifierType modifiers, WindowState *state) {
     if (key != GDK_KEY_Tab) return FALSE;
     auto *widget = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(controller));
     const bool reverse = (modifiers & GDK_SHIFT_MASK) != 0;
     if (widget == state->reload_stop && !reverse) {
+        gtk_widget_grab_focus(state->site_button);
+        return TRUE;
+    }
+    if (widget == state->site_button && reverse) {
+        gtk_widget_grab_focus(state->reload_stop);
+        return TRUE;
+    }
+    if (widget == state->site_button && !reverse) {
         gtk_widget_grab_focus(state->address);
         return TRUE;
     }
@@ -2041,8 +2123,8 @@ void install_style(GtkWidget *window) {
     auto *provider = gtk_css_provider_new();
     gtk_css_provider_load_from_string(provider,
         "window { background: #171716; color: #ece8df; }"
-        "headerbar { min-height: 34px; padding: 0 6px; background: #242423; box-shadow: inset 0 -1px #393936; border: 0; }"
-        "headerbar.private-header { background: #2d2927; }"
+        ".vantage-titlebar { min-height: 34px; padding: 0 6px; background: #242423; box-shadow: inset 0 -1px #393936; border: 0; }"
+        ".vantage-titlebar.private-header { background: #2d2927; }"
         ".tab-strip { margin-top: 2px; }"
         ".browser-tab { min-width: 184px; margin-right: 0; background: transparent; }"
         ".browser-tab-body { background: transparent; }"
@@ -2071,6 +2153,8 @@ void install_style(GtkWidget *window) {
         ".site-information-popover contents { padding: 12px; border: 1px solid #474641; border-radius: 12px; background: #2c2c2c; }"
         ".site-information-popover .site-title { font-size: 16px; font-weight: 600; color: #f4efe5; }"
         ".site-information-popover .site-detail { color: #bbb6ac; }"
+        ".site-information-popover button { padding: 7px 5px; border: 0; border-radius: 6px; background: transparent; color: #eee9df; box-shadow: none; }"
+        ".site-information-popover button:hover { background: #474642; color: #ff9a76; }"
         ".main-menu contents { padding: 8px; border: 1px solid #474641; border-radius: 12px; background: #2c2c2c; }"
         ".main-menu .menu-item { padding: 8px 10px; border: 0; border-radius: 7px; background: transparent; color: #eee9df; box-shadow: none; }"
         ".main-menu .menu-item:hover { background: #474642; }"
@@ -2122,9 +2206,9 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     gtk_window_set_default_size(GTK_WINDOW(state->window),
         source_width > 0 ? source_width : 1100, source_height > 0 ? source_height : 760);
 
-    auto *header = gtk_header_bar_new();
+    auto *header = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_add_css_class(header, "vantage-titlebar");
     if (private_mode) gtk_widget_add_css_class(header, "private-header");
-    gtk_header_bar_set_show_title_buttons(GTK_HEADER_BAR(header), TRUE);
     auto *tab_strip = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
     gtk_widget_add_css_class(tab_strip, "tab-strip");
     state->tab_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
@@ -2161,8 +2245,10 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     gtk_box_append(GTK_BOX(tab_strip), state->tab_scroller);
     gtk_widget_set_hexpand(tab_strip, TRUE);
     gtk_widget_set_halign(tab_strip, GTK_ALIGN_FILL);
-    gtk_header_bar_pack_start(GTK_HEADER_BAR(header), tab_strip);
-    gtk_header_bar_set_title_widget(GTK_HEADER_BAR(header), gtk_label_new(""));
+    gtk_box_append(GTK_BOX(header), tab_strip);
+    auto *window_controls = gtk_window_controls_new(GTK_PACK_END);
+    gtk_widget_set_valign(window_controls, GTK_ALIGN_CENTER);
+    gtk_box_append(GTK_BOX(header), window_controls);
     auto *header_middle = gtk_gesture_click_new();
     gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(header_middle), GDK_BUTTON_MIDDLE);
     gtk_gesture_single_set_exclusive(GTK_GESTURE_SINGLE(header_middle), TRUE);
@@ -2211,7 +2297,6 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     gtk_widget_set_tooltip_text(state->site_button, "View site information");
     gtk_widget_set_halign(state->site_button, GTK_ALIGN_START);
     gtk_widget_set_valign(state->site_button, GTK_ALIGN_CENTER);
-    gtk_widget_set_focusable(state->site_button, FALSE);
     auto *site_popover = gtk_popover_new();
     gtk_widget_add_css_class(site_popover, "site-information-popover");
     auto *site_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 9);
@@ -2220,27 +2305,33 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     gtk_widget_add_css_class(state->site_title, "site-title");
     gtk_widget_set_halign(state->site_title, GTK_ALIGN_START);
     state->site_connection = gtk_label_new("Connection information unavailable");
-    state->site_certificate = gtk_label_new("Certificate information unavailable");
+    state->site_certificate = gtk_button_new_with_label("Certificate information unavailable");
     state->site_data = gtk_label_new("Cookies and site data");
-    for (auto *detail : {state->site_connection, state->site_certificate, state->site_data}) {
+    for (auto *detail : {state->site_connection, state->site_data}) {
         gtk_widget_add_css_class(detail, "site-detail");
         gtk_widget_set_halign(detail, GTK_ALIGN_START);
         gtk_label_set_wrap(GTK_LABEL(detail), TRUE);
     }
+    gtk_widget_set_halign(state->site_certificate, GTK_ALIGN_FILL);
+    state->site_clear = gtk_button_new_with_label("Clear cookies and site data");
+    gtk_widget_set_halign(state->site_clear, GTK_ALIGN_FILL);
     gtk_box_append(GTK_BOX(site_box), state->site_title);
     gtk_box_append(GTK_BOX(site_box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
     gtk_box_append(GTK_BOX(site_box), state->site_connection);
     gtk_box_append(GTK_BOX(site_box), state->site_certificate);
     gtk_box_append(GTK_BOX(site_box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
     gtk_box_append(GTK_BOX(site_box), state->site_data);
+    gtk_box_append(GTK_BOX(site_box), state->site_clear);
     gtk_popover_set_child(GTK_POPOVER(site_popover), site_box);
     gtk_menu_button_set_popover(GTK_MENU_BUTTON(state->site_button), site_popover);
+    g_signal_connect(state->site_certificate, "clicked", G_CALLBACK(show_site_certificate), state);
+    g_signal_connect(state->site_clear, "clicked", G_CALLBACK(clear_site_cookies), state);
     gtk_overlay_add_overlay(GTK_OVERLAY(address_wrap), state->site_button);
     state->address_popover = gtk_popover_new();
     gtk_widget_add_css_class(state->address_popover, "address-suggestions");
     gtk_popover_set_has_arrow(GTK_POPOVER(state->address_popover), FALSE);
     gtk_popover_set_position(GTK_POPOVER(state->address_popover), GTK_POS_BOTTOM);
-    gtk_popover_set_autohide(GTK_POPOVER(state->address_popover), FALSE);
+    gtk_popover_set_autohide(GTK_POPOVER(state->address_popover), TRUE);
     state->address_suggestions = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
     gtk_widget_set_size_request(state->address_suggestions, 620, -1);
     gtk_popover_set_child(GTK_POPOVER(state->address_popover), state->address_suggestions);
@@ -2334,15 +2425,24 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     g_signal_connect(state->address, "activate", G_CALLBACK(submit_address), state);
     g_signal_connect(state->address, "changed", G_CALLBACK(address_changed), state);
     auto *address_keys = gtk_event_controller_key_new();
+    gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(address_keys), GTK_PHASE_CAPTURE);
     g_signal_connect(address_keys, "key-pressed", G_CALLBACK(address_key_pressed), state);
+    g_signal_connect(address_keys, "key-released", G_CALLBACK(address_key_released), state);
     gtk_widget_add_controller(state->address, address_keys);
     auto *reload_keys = gtk_event_controller_key_new();
+    gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(reload_keys), GTK_PHASE_CAPTURE);
     g_signal_connect(reload_keys, "key-pressed", G_CALLBACK(toolbar_focus_key), state);
     gtk_widget_add_controller(state->reload_stop, reload_keys);
+    auto *site_keys = gtk_event_controller_key_new();
+    gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(site_keys), GTK_PHASE_CAPTURE);
+    g_signal_connect(site_keys, "key-pressed", G_CALLBACK(toolbar_focus_key), state);
+    gtk_widget_add_controller(state->site_button, site_keys);
     auto *bookmark_keys = gtk_event_controller_key_new();
+    gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(bookmark_keys), GTK_PHASE_CAPTURE);
     g_signal_connect(bookmark_keys, "key-pressed", G_CALLBACK(toolbar_focus_key), state);
     gtk_widget_add_controller(state->bookmark_button, bookmark_keys);
     auto *downloads_keys = gtk_event_controller_key_new();
+    gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(downloads_keys), GTK_PHASE_CAPTURE);
     g_signal_connect(downloads_keys, "key-pressed", G_CALLBACK(toolbar_focus_key), state);
     gtk_widget_add_controller(state->downloads_button, downloads_keys);
     g_signal_connect(state->bookmark_button, "clicked", G_CALLBACK(toggle_bookmark), state);
