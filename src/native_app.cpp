@@ -1338,7 +1338,8 @@ void tab_pointer_left(GtkEventControllerMotion *, TabState *tab) {
 void draw_new_tab_backdrop(GtkDrawingArea *, cairo_t *cr, int width, int height, void *data) {
     auto *state = static_cast<WindowState *>(data);
     if (!state->new_tab_hovered) return;
-    rounded_rectangle(cr, 0, 0, width, height, 7);
+    const double size = std::min({24.0, static_cast<double>(width), static_cast<double>(height)});
+    rounded_rectangle(cr, (width - size) / 2.0, (height - size) / 2.0, size, size, 7);
     cairo_set_source_rgb(cr, 0x3a / 255.0, 0x39 / 255.0, 0x36 / 255.0);
     cairo_fill(cr);
 }
@@ -1553,12 +1554,11 @@ void clear_box(GtkWidget *box) {
 }
 
 void hide_address_suggestions(WindowState *state) {
-    gtk_popover_popdown(GTK_POPOVER(state->address_popover));
+    gtk_widget_set_visible(state->address_popover, FALSE);
 }
 
 void show_address_suggestions(WindowState *state) {
-    gtk_popover_popup(GTK_POPOVER(state->address_popover));
-    gtk_popover_present(GTK_POPOVER(state->address_popover));
+    gtk_widget_set_visible(state->address_popover, TRUE);
 }
 
 void history_suggestion_clicked(GtkButton *button, WindowState *state) {
@@ -1638,7 +1638,11 @@ gboolean toolbar_focus_key(GtkEventControllerKey *controller, guint key, guint,
 }
 
 void address_changed(GtkEditable *editable, WindowState *state) {
-    if (!gtk_widget_has_focus(state->address)) return;
+    auto *focus = gtk_root_get_focus(GTK_ROOT(state->window));
+    if (!focus || (focus != state->address && !gtk_widget_is_ancestor(focus, state->address))) {
+        hide_address_suggestions(state);
+        return;
+    }
     const std::string query = gtk_editable_get_text(editable);
     clear_box(state->address_suggestions);
     if (query.empty()) {
@@ -2170,7 +2174,7 @@ void install_style(GtkWidget *window) {
         ".toolbar .stop-icon { font-size: 27px; font-weight: 400; }"
         ".address-wrap entry { min-height: 30px; padding: 0 38px 0 42px; border-radius: 8px; border: 1px solid #45433f; background: #191918; color: #f1ede3; box-shadow: none; }"
         ".toolbar entry:focus { border-color: #ff8a62; box-shadow: 0 0 0 1px #ff8a62; }"
-        ".address-suggestions contents { padding: 7px; border: 1px solid #474641; border-radius: 10px; background: #2c2c2c; }"
+        ".address-suggestions { padding: 7px; border: 1px solid #474641; border-radius: 10px; background: #2c2c2c; box-shadow: 0 7px 20px #0009; }"
         ".address-suggestion { min-width: 0; padding: 8px 11px; border: 0; border-radius: 7px; background: transparent; color: #eee9df; box-shadow: none; }"
         ".address-suggestion:hover { background: #45433f; }.address-suggestion .suggestion-uri { color: #aaa59c; font-size: 12px; }"
         ".address-bookmark { margin-right: 4px; }"
@@ -2184,6 +2188,7 @@ void install_style(GtkWidget *window) {
         ".certificate-heading { font-size: 20px; font-weight: 650; color: #f5f0e6; }"
         ".certificate-label { font-size: 11px; font-weight: 700; color: #ff9a76; }"
         ".certificate-value { color: #cbc6bc; }"
+        ".certificate-value selection { background-color: #ff9a76; color: #171716; }"
         ".certificate-close { padding: 7px 18px; border: 1px solid #55514b; border-radius: 7px; background: #353330; color: #f2ede3; box-shadow: none; }"
         ".certificate-close:hover { border-color: #ff9a76; color: #ff9a76; }"
         ".main-menu contents { padding: 8px; border: 1px solid #474641; border-radius: 12px; background: #2c2c2c; }"
@@ -2252,6 +2257,8 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     gtk_widget_set_tooltip_text(new_button, "New tab");
     gtk_widget_add_css_class(new_button, "new-tab");
     auto *new_tab_content = gtk_overlay_new();
+    gtk_widget_set_size_request(new_tab_content, 24, 24);
+    gtk_widget_set_valign(new_tab_content, GTK_ALIGN_CENTER);
     state->new_tab_backdrop = gtk_drawing_area_new();
     gtk_widget_set_size_request(state->new_tab_backdrop, 24, 24);
     gtk_widget_set_can_target(state->new_tab_backdrop, FALSE);
@@ -2356,17 +2363,11 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     g_signal_connect(state->site_certificate, "clicked", G_CALLBACK(show_site_certificate), state);
     g_signal_connect(state->site_clear, "clicked", G_CALLBACK(clear_site_cookies), state);
     gtk_overlay_add_overlay(GTK_OVERLAY(address_wrap), state->site_button);
-    state->address_popover = gtk_popover_new();
+    state->address_popover = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     gtk_widget_add_css_class(state->address_popover, "address-suggestions");
-    gtk_popover_set_has_arrow(GTK_POPOVER(state->address_popover), FALSE);
-    gtk_popover_set_position(GTK_POPOVER(state->address_popover), GTK_POS_BOTTOM);
-    gtk_popover_set_autohide(GTK_POPOVER(state->address_popover), TRUE);
     state->address_suggestions = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
-    gtk_widget_set_size_request(state->address_suggestions, 620, -1);
-    gtk_popover_set_child(GTK_POPOVER(state->address_popover), state->address_suggestions);
-    gtk_widget_set_halign(state->address_popover, GTK_ALIGN_FILL);
-    gtk_widget_set_valign(state->address_popover, GTK_ALIGN_END);
-    gtk_overlay_add_overlay(GTK_OVERLAY(address_wrap), state->address_popover);
+    gtk_box_append(GTK_BOX(state->address_popover), state->address_suggestions);
+    gtk_widget_set_visible(state->address_popover, FALSE);
     state->bookmark_button = icon_button("non-starred-symbolic", "Bookmark this tab");
     gtk_widget_add_css_class(state->bookmark_button, "address-bookmark");
     gtk_widget_set_halign(state->bookmark_button, GTK_ALIGN_END);
@@ -2445,6 +2446,12 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     gtk_widget_set_vexpand(page_overlay, TRUE);
     gtk_overlay_set_child(GTK_OVERLAY(page_overlay), state->stack);
     gtk_overlay_add_overlay(GTK_OVERLAY(page_overlay), state->find_bar);
+    gtk_widget_set_halign(state->address_popover, GTK_ALIGN_FILL);
+    gtk_widget_set_valign(state->address_popover, GTK_ALIGN_START);
+    gtk_widget_set_margin_start(state->address_popover, 140);
+    gtk_widget_set_margin_end(state->address_popover, 100);
+    gtk_widget_set_margin_top(state->address_popover, 2);
+    gtk_overlay_add_overlay(GTK_OVERLAY(page_overlay), state->address_popover);
     gtk_box_append(GTK_BOX(layout), navigation);
     gtk_box_append(GTK_BOX(layout), page_overlay);
     gtk_window_set_child(GTK_WINDOW(state->window), layout);
