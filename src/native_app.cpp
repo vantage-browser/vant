@@ -89,6 +89,7 @@ struct WindowState {
     bool closed{};
     bool new_tab_hovered{};
     bool suggestions_hovered{};
+    bool force_address_suggestions{};
     double progress_fraction{};
     gint64 last_tab_scroll{};
     unsigned find_current{};
@@ -1663,7 +1664,13 @@ gboolean address_key_pressed(GtkEventControllerKey *, guint key, guint, GdkModif
         gtk_widget_grab_focus(reverse ? state->site_button : state->bookmark_button);
         return TRUE;
     }
-    if (key != GDK_KEY_Down || !gtk_widget_get_visible(state->address_popover)) return FALSE;
+    if (key != GDK_KEY_Down) return FALSE;
+    if (!gtk_widget_get_visible(state->address_popover)) {
+        state->force_address_suggestions = true;
+        address_changed(GTK_EDITABLE(state->address), state);
+        state->force_address_suggestions = false;
+    }
+    if (!gtk_widget_get_visible(state->address_popover)) return FALSE;
     if (auto *first = gtk_widget_get_first_child(state->address_suggestions)) {
         gtk_widget_grab_focus(first);
         return TRUE;
@@ -1717,7 +1724,7 @@ void address_changed(GtkEditable *editable, WindowState *state) {
     }
     const std::string query = gtk_editable_get_text(editable);
     clear_box(state->address_suggestions);
-    if (query.empty()) {
+    if (query.empty() && !state->force_address_suggestions) {
         hide_address_suggestions(state);
         return;
     }
@@ -2412,6 +2419,8 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     gtk_widget_set_valign(state->site_button, GTK_ALIGN_CENTER);
     auto *site_popover = gtk_popover_new();
     gtk_widget_add_css_class(site_popover, "site-information-popover");
+    gtk_popover_set_has_arrow(GTK_POPOVER(site_popover), FALSE);
+    gtk_popover_set_offset(GTK_POPOVER(site_popover), 145, 0);
     auto *site_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 9);
     gtk_widget_set_size_request(site_box, 310, -1);
     state->site_title = gtk_label_new("This page");
