@@ -39,6 +39,7 @@ struct TabState {
     GtkWidget *spinner{};
     std::string internal_uri;
     std::string display_uri;
+    bool can_return_to_new_tab{};
     bool closing{};
     bool hovered{};
     bool user_stopped{};
@@ -791,7 +792,7 @@ std::string new_tab_page(WindowState *state) {
         return left.visits > right.visits;
     });
     if (top_sites.size() > 5) top_sites.resize(5);
-    std::string tiles = "<nav class=topSites aria-label='Most visited sites'>";
+    std::string tiles = "<nav id=topSites class=topSites aria-label='Most visited sites'>";
     for (const auto &site : top_sites) tiles += "<a class=topSite href='" + html_escape(site.uri) + "'>" +
         favicon_html(state->owner, site.uri) + "<span>" + html_escape(site.title) + "</span></a>";
     tiles += "</nav>";
@@ -808,11 +809,11 @@ std::string new_tab_page(WindowState *state) {
         "input::placeholder{color:#aaa59c}input:focus{border-color:#ff8a62;box-shadow:0 0 0 1px #ff8a62,0 6px 16px #0004}input.open,input.open:focus{border-color:#4a4844;border-bottom-color:transparent;border-radius:10px 10px 0 0;box-shadow:none}"
         ".suggestions{position:absolute;z-index:2;top:48px;left:0;right:0;display:none;border:1px solid #4a4844;border-top:0;border-radius:0 0 10px 10px;background:#2b2a29;padding:5px 6px 7px;box-shadow:0 4px 10px #0005}.suggestions.open{display:block}"
         ".item{display:flex;align-items:center;gap:7px;min-width:0;padding:7px 11px;border-radius:6px;color:#eee9df;cursor:default}.item.active{background:#45433f;outline:1px solid #74b928;outline-offset:-1px}.item .query{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.item small{flex:none;color:#aaa59c}.item small:before{content:'– ';}"
-        ".topSites{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;margin-top:20px}.topSite{display:flex;min-width:0;flex-direction:column;align-items:center;gap:8px;padding:12px 7px;border-radius:9px;color:#d8d4cc;text-decoration:none}.topSite:hover{background:#2b2a29;color:#fff}.topSite .favicon{width:30px;height:30px;object-fit:contain}.topSite .fallback{display:grid;place-items:center;width:30px;height:30px;color:#aaa59c}.topSite span{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}"
+        ".topSites{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;margin-top:20px}.topSites[hidden]{display:none}.topSite{display:flex;min-width:0;flex-direction:column;align-items:center;gap:8px;padding:12px 7px;border-radius:9px;color:#d8d4cc;text-decoration:none}.topSite:hover{background:#2b2a29;color:#fff}.topSite .favicon{width:30px;height:30px;object-fit:contain}.topSite .fallback{display:grid;place-items:center;width:30px;height:30px;color:#aaa59c}.topSite span{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}"
         "</style></head><body><main class=home><form class=searchbox id=searchForm action='https://search.brave.com/search' method=get><input id=searchInput name=q type=search autocomplete=off spellcheck=false placeholder='Search' aria-label='Search'><div id=suggestions class=suggestions></div></form>" + tiles + "</main>"
         "<script>const seed=" + seed + ";let saved=[];try{saved=JSON.parse(localStorage.getItem('vant-search-history')||'[]')}catch(e){}let history=[...new Set([...saved,...seed])].slice(0,40),shown=[],active=-1;"
-        "const input=searchInput,panel=suggestions,form=searchForm;function closeList(){panel.classList.remove('open');input.classList.remove('open');active=-1}"
-        "function paint(){[...panel.children].forEach((e,i)=>e.classList.toggle('active',i===active))}function showList(){const q=input.value.trim().toLowerCase();shown=history.filter(v=>!q||v.toLowerCase().includes(q)).slice(0,10);panel.replaceChildren(...shown.map((v,i)=>{const d=document.createElement('div');d.className='item';d.innerHTML='<span class=query></span><small>Search</small>';d.querySelector('.query').textContent=v;d.onpointermove=()=>{active=i;paint()};d.onmousedown=e=>e.preventDefault();d.onclick=()=>choose(i);return d}));if(shown.length){panel.classList.add('open');input.classList.add('open')}else closeList();paint()}"
+        "const input=searchInput,panel=suggestions,form=searchForm,sites=topSites;function closeList(){panel.classList.remove('open');input.classList.remove('open');sites.hidden=false;active=-1}"
+        "function paint(){[...panel.children].forEach((e,i)=>e.classList.toggle('active',i===active))}function showList(){const q=input.value.trim().toLowerCase();shown=history.filter(v=>!q||v.toLowerCase().includes(q)).slice(0,10);panel.replaceChildren(...shown.map((v,i)=>{const d=document.createElement('div');d.className='item';d.innerHTML='<span class=query></span><small>Search</small>';d.querySelector('.query').textContent=v;d.onpointermove=()=>{active=i;paint()};d.onmousedown=e=>e.preventDefault();d.onclick=()=>choose(i);return d}));if(shown.length){panel.classList.add('open');input.classList.add('open');sites.hidden=true}else closeList();paint()}"
         "function remember(v){v=v.trim();if(!v)return;history=[v,...history.filter(x=>x!==v)].slice(0,40);try{localStorage.setItem('vant-search-history',JSON.stringify(history))}catch(e){}}function choose(i){if(i<0||i>=shown.length)return;input.value=shown[i];remember(input.value);closeList();form.submit()}"
         "input.oninput=showList;input.onfocus=()=>{if(input.value)showList()};input.onkeydown=e=>{if(e.key==='ArrowDown'){e.preventDefault();if(!panel.classList.contains('open'))showList();if(shown.length){active=Math.min(active+1,shown.length-1);paint()}}else if(e.key==='ArrowUp'){e.preventDefault();if(shown.length){active=active<=0?0:active-1;paint()}}else if(e.key==='Enter'&&active>=0){e.preventDefault();choose(active)}else if(e.key==='Escape')closeList()};"
         "form.onsubmit=()=>{remember(input.value);closeList()};document.onmousedown=e=>{if(!form.contains(e.target))closeList()};window.onblur=closeList;"
@@ -820,6 +821,9 @@ std::string new_tab_page(WindowState *state) {
 }
 
 void load_decision(TabState *tab, const vantage::NavigationDecision &decision) {
+    const bool returning_home = decision.kind == vantage::NavigationKind::internal && decision.uri == "vantage:new";
+    if (tab->internal_uri == "vantage:new" && !returning_home) tab->can_return_to_new_tab = true;
+    if (returning_home) tab->can_return_to_new_tab = false;
     if (decision.kind == vantage::NavigationKind::web) {
         tab->internal_uri.clear();
         tab->display_uri.clear();
@@ -858,7 +862,13 @@ void submit_address(GtkEntry *, WindowState *state) {
 }
 
 void go_back(GtkButton *, WindowState *state) {
-    if (state->view && webkit_web_view_can_go_back(state->view)) webkit_web_view_go_back(state->view);
+    if (!state->view) return;
+    if (webkit_web_view_can_go_back(state->view)) {
+        webkit_web_view_go_back(state->view);
+        return;
+    }
+    if (auto *tab = find_tab(state, state->view); tab && tab->can_return_to_new_tab)
+        load_decision(tab, state->policy.resolve("vantage:new"));
 }
 
 void go_forward(GtkButton *, WindowState *state) {
@@ -1591,6 +1601,8 @@ GtkWidget *menu_item(const char *label, const char *shortcut, GCallback callback
 GtkWidget *create_main_menu(WindowState *state) {
     auto *popover = gtk_popover_new();
     gtk_widget_add_css_class(popover, "main-menu");
+    gtk_popover_set_has_arrow(GTK_POPOVER(popover), FALSE);
+    gtk_popover_set_offset(GTK_POPOVER(popover), -145, 0);
     auto *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
     gtk_widget_set_size_request(box, 310, -1);
     gtk_box_append(GTK_BOX(box), menu_item("New tab", "Ctrl+T", G_CALLBACK(menu_new_tab), state));
