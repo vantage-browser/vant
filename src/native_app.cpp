@@ -85,6 +85,7 @@ struct WindowState {
     WebKitNetworkSession *private_session{};
     TabState *middle_pressed_tab{};
     std::vector<std::unique_ptr<TabState>> tabs;
+    std::vector<std::string> closed_tab_uris;
     vantage::NavigationPolicy policy;
     bool smoke{};
     bool private_mode{};
@@ -1492,6 +1493,15 @@ void close_tab(TabState *tab) {
     if (state->middle_pressed_tab == tab) state->middle_pressed_tab = nullptr;
     const auto index = static_cast<std::size_t>(std::distance(state->tabs.begin(), found));
     const bool was_active = state->view == tab->view;
+    std::string restore_uri;
+    if (tab->display_uri.starts_with("source:")) restore_uri = tab->display_uri.substr(7);
+    else if (!tab->display_uri.empty()) restore_uri = tab->display_uri;
+    else if (!tab->internal_uri.empty()) restore_uri = tab->internal_uri;
+    else if (const char *uri = webkit_web_view_get_uri(tab->view); uri && *uri) restore_uri = uri;
+    if (restore_uri.empty() || restore_uri == "about:blank") restore_uri = "vantage:new";
+    state->closed_tab_uris.push_back(std::move(restore_uri));
+    constexpr std::size_t closed_tab_limit = 25;
+    if (state->closed_tab_uris.size() > closed_tab_limit) state->closed_tab_uris.erase(state->closed_tab_uris.begin());
     gtk_box_remove(GTK_BOX(state->tab_box), tab->tab);
     gtk_stack_remove(GTK_STACK(state->stack), tab->page);
     state->tabs.erase(found);
@@ -1501,6 +1511,13 @@ void close_tab(TabState *tab) {
         select_tab(state->tabs[std::min(index, state->tabs.size() - 1)].get());
     }
     update_tab_widths(state);
+}
+
+void reopen_closed_tab(WindowState *state) {
+    if (state->closed_tab_uris.empty()) return;
+    auto uri = std::move(state->closed_tab_uris.back());
+    state->closed_tab_uris.pop_back();
+    new_tab(state, uri);
 }
 
 gboolean close_tab_deferred(void *data) {
@@ -1555,6 +1572,10 @@ void show_bookmarks(GtkButton *, WindowState *state) { close_main_menu(state); o
 void show_settings(GtkButton *, WindowState *state) { close_main_menu(state); open_internal(state, "vantage:settings"); }
 void show_about(GtkButton *, WindowState *state) { close_main_menu(state); open_internal(state, "vantage:about"); }
 void menu_new_tab(GtkButton *, WindowState *state) { close_main_menu(state); new_tab(state, "vantage:new"); }
+void menu_reopen_closed_tab(GtkButton *, WindowState *state) {
+    close_main_menu(state);
+    reopen_closed_tab(state);
+}
 void menu_new_window(GtkButton *, WindowState *state) {
     close_main_menu(state);
     create_window(state->owner, "vantage:new", false, state, false);
@@ -1627,6 +1648,7 @@ GtkWidget *create_main_menu(WindowState *state) {
     auto *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
     gtk_widget_set_size_request(box, 310, -1);
     gtk_box_append(GTK_BOX(box), menu_item("New tab", "Ctrl+T", G_CALLBACK(menu_new_tab), state));
+    gtk_box_append(GTK_BOX(box), menu_item("Reopen closed tab", "Ctrl+Shift+T", G_CALLBACK(menu_reopen_closed_tab), state));
     gtk_box_append(GTK_BOX(box), menu_item("New window", "Ctrl+N", G_CALLBACK(menu_new_window), state));
     gtk_box_append(GTK_BOX(box), menu_item("New private window", "Ctrl+Shift+N", G_CALLBACK(menu_new_private_window), state));
     gtk_box_append(GTK_BOX(box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
@@ -2173,6 +2195,12 @@ gboolean focus_address_deferred(void *data) {
     return G_SOURCE_REMOVE;
 }
 
+void enforce_address_direction(GObject *, GParamSpec *, GtkWidget *address) {
+    if (gtk_widget_get_direction(address) != GTK_TEXT_DIR_LTR)
+        gtk_widget_set_direction(address, GTK_TEXT_DIR_LTR);
+    gtk_entry_set_alignment(GTK_ENTRY(address), 0.0f);
+}
+
 TabState *new_tab(WindowState *state, const std::string &uri, bool load_initial) {
     auto owned = std::make_unique<TabState>();
     auto *tab = owned.get();
@@ -2280,6 +2308,7 @@ gboolean finish_smoke(void *data) {
 gboolean key_pressed(GtkEventControllerKey *, guint keyval, guint,
                      GdkModifierType modifiers, WindowState *state) {
     const bool control = (modifiers & GDK_CONTROL_MASK) != 0;
+    const bool shift = (modifiers & GDK_SHIFT_MASK) != 0;
     const bool alternate = (modifiers & GDK_ALT_MASK) != 0;
     if (control && keyval >= GDK_KEY_1 && keyval <= GDK_KEY_9) {
         const auto index = static_cast<std::size_t>(keyval - GDK_KEY_1);
@@ -2293,6 +2322,10 @@ gboolean key_pressed(GtkEventControllerKey *, guint keyval, guint,
     }
     if (control && (keyval == GDK_KEY_f || keyval == GDK_KEY_F)) {
         show_find(state);
+        return TRUE;
+    }
+    if (control && shift && (keyval == GDK_KEY_t || keyval == GDK_KEY_T)) {
+        reopen_closed_tab(state);
         return TRUE;
     }
     if (control && (keyval == GDK_KEY_t || keyval == GDK_KEY_T)) {
@@ -2527,6 +2560,9 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     gtk_button_set_child(GTK_BUTTON(state->reload_stop), state->reload_stack);
     state->address = gtk_entry_new();
     gtk_widget_set_hexpand(state->address, TRUE);
+    gtk_widget_set_direction(state->address, GTK_TEXT_DIR_LTR);
+    gtk_entry_set_alignment(GTK_ENTRY(state->address), 0.0f);
+    g_signal_connect(state->address, "notify::direction", G_CALLBACK(enforce_address_direction), state->address);
     gtk_entry_set_placeholder_text(GTK_ENTRY(state->address), "Search or enter address");
     gtk_box_append(GTK_BOX(toolbar), back);
     gtk_box_append(GTK_BOX(toolbar), forward);
@@ -2709,6 +2745,7 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     g_signal_connect(find_close, "clicked", G_CALLBACK(close_find), state);
     g_signal_connect(new_button, "clicked", G_CALLBACK(add_tab), state);
     auto *keys = gtk_event_controller_key_new();
+    gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(keys), GTK_PHASE_CAPTURE);
     g_signal_connect(keys, "key-pressed", G_CALLBACK(key_pressed), state);
     gtk_widget_add_controller(state->window, keys);
 

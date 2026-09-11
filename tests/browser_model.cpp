@@ -18,6 +18,7 @@ int main() {
     assert(!model.close_tab(999999));
     assert(!model.move_tab(second, 999));
     assert(vantage::command_for_shortcut("Ctrl+T") == vantage::Command::new_tab);
+    assert(vantage::command_for_shortcut("Ctrl+Shift+T") == vantage::Command::reopen_tab);
     assert(vantage::command_for_shortcut("Ctrl+N") == vantage::Command::new_window);
     assert(vantage::command_for_shortcut("Ctrl+Shift+N") == vantage::Command::new_private_window);
     assert(vantage::command_for_shortcut("Ctrl+J") == vantage::Command::downloads);
