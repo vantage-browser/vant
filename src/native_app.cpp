@@ -40,10 +40,12 @@ struct TabState {
     GtkWidget *spinner{};
     std::string internal_uri;
     std::string display_uri;
+    std::string pending_web_uri;
     bool can_return_to_new_tab{};
     bool closing{};
     bool hovered{};
     bool user_stopped{};
+    bool recovering_blank_navigation{};
 };
 
 struct WindowState {
@@ -836,10 +838,14 @@ void load_decision(TabState *tab, const vantage::NavigationDecision &decision) {
     if (decision.kind == vantage::NavigationKind::web) {
         tab->internal_uri.clear();
         tab->display_uri.clear();
+        tab->pending_web_uri = decision.uri;
+        tab->recovering_blank_navigation = false;
         webkit_web_view_load_uri(tab->view, decision.uri.c_str());
     } else if (decision.kind == vantage::NavigationKind::internal) {
         tab->internal_uri = decision.uri;
         tab->display_uri.clear();
+        tab->pending_web_uri.clear();
+        tab->recovering_blank_navigation = false;
         const char *icon = decision.uri == "vantage:history" ? "document-open-recent-symbolic" :
             decision.uri == "vantage:downloads" ? "folder-download-symbolic" :
             decision.uri == "vantage:bookmarks" ? "starred-symbolic" :
@@ -1139,6 +1145,14 @@ void fallback_favicon_url_ready(GObject *source, GAsyncResult *result, void *dat
 
 void load_changed(WebKitWebView *view, WebKitLoadEvent event, TabState *tab) {
     if (event == WEBKIT_LOAD_STARTED) tab->user_stopped = false;
+    const char *current_uri = webkit_web_view_get_uri(view);
+    if (event == WEBKIT_LOAD_COMMITTED && current_uri &&
+        std::string_view(current_uri) == "about:blank" && !tab->pending_web_uri.empty() &&
+        !tab->recovering_blank_navigation) {
+        tab->recovering_blank_navigation = true;
+        webkit_web_view_load_uri(view, tab->pending_web_uri.c_str());
+        return;
+    }
     if (event != WEBKIT_LOAD_FINISHED) return;
     if (!tab->window->private_mode && tab->internal_uri.empty()) {
         const char *uri = webkit_web_view_get_uri(view);
@@ -1147,6 +1161,10 @@ void load_changed(WebKitWebView *view, WebKitLoadEvent event, TabState *tab) {
             tab->window->owner->data->add_history(uri, title ? title : uri, now_seconds());
     }
     const char *page_uri = webkit_web_view_get_uri(view);
+    if (page_uri && (g_str_has_prefix(page_uri, "http://") || g_str_has_prefix(page_uri, "https://"))) {
+        tab->pending_web_uri.clear();
+        tab->recovering_blank_navigation = false;
+    }
     if (!page_uri || (!g_str_has_prefix(page_uri, "http://") && !g_str_has_prefix(page_uri, "https://"))) return;
     auto *request = new FaviconRequest{tab->window,
         WEBKIT_WEB_VIEW(g_object_ref(view)), nullptr, nullptr, page_uri};
@@ -1202,6 +1220,10 @@ gboolean decide_policy(WebKitWebView *view, WebKitPolicyDecision *decision,
     const char *uri = webkit_uri_request_get_uri(request);
     if (!tab->internal_uri.empty() && uri && std::string_view(uri) == "about:blank") return FALSE;
     const std::string_view target = uri ? uri : "";
+    if (target == "about:blank" && !tab->pending_web_uri.empty()) {
+        webkit_policy_decision_ignore(decision);
+        return TRUE;
+    }
     const char *current_uri = webkit_web_view_get_uri(view);
     if (type == WEBKIT_POLICY_DECISION_TYPE_NAVIGATION_ACTION && target.starts_with("about:") &&
         current_uri && (g_str_has_prefix(current_uri, "http://") || g_str_has_prefix(current_uri, "https://"))) {
@@ -1309,6 +1331,8 @@ gboolean decide_policy(WebKitWebView *view, WebKitPolicyDecision *decision,
         if (tab->internal_uri == "vantage:source") return FALSE;
         tab->internal_uri.clear();
         tab->display_uri.clear();
+        tab->pending_web_uri = resolved.uri;
+        tab->recovering_blank_navigation = false;
         return FALSE;
     }
     webkit_policy_decision_ignore(decision);
@@ -1789,6 +1813,10 @@ gboolean suggestion_key_pressed(GtkEventControllerKey *, guint key, guint, GdkMo
 
 gboolean address_key_pressed(GtkEventControllerKey *, guint key, guint, GdkModifierType modifiers,
                              WindowState *state) {
+    if (key == GDK_KEY_Return || key == GDK_KEY_KP_Enter) {
+        hide_address_suggestions(state);
+        return FALSE;
+    }
     if (key == GDK_KEY_Tab || key == GDK_KEY_ISO_Left_Tab) {
         const bool reverse = key == GDK_KEY_ISO_Left_Tab || (modifiers & GDK_SHIFT_MASK) != 0;
         gtk_widget_grab_focus(reverse ? state->site_button : state->bookmark_button);
@@ -1808,8 +1836,12 @@ gboolean address_key_pressed(GtkEventControllerKey *, guint key, guint, GdkModif
     return FALSE;
 }
 
-void address_key_released(GtkEventControllerKey *, guint, guint, GdkModifierType,
+void address_key_released(GtkEventControllerKey *, guint key, guint, GdkModifierType,
                           WindowState *state) {
+    if (key == GDK_KEY_Return || key == GDK_KEY_KP_Enter) {
+        hide_address_suggestions(state);
+        return;
+    }
     const char *text = gtk_editable_get_text(GTK_EDITABLE(state->address));
     if (text && *text) address_changed(GTK_EDITABLE(state->address), state);
 }
