@@ -1801,13 +1801,28 @@ void address_changed(GtkEditable *editable, WindowState *state) {
     }
     std::string needle = query;
     std::ranges::transform(needle, needle.begin(), [](unsigned char value) { return std::tolower(value); });
-    std::vector<std::string> seen;
-    unsigned shown = 0;
+    struct RankedSuggestion {
+        vantage::HistoryEntry entry;
+        unsigned visits{};
+    };
+    std::vector<RankedSuggestion> ranked;
     for (const auto &entry : state->owner->data->history()) {
+        const auto found = std::ranges::find(ranked, entry.uri, [](const auto &candidate) {
+            return candidate.entry.uri;
+        });
+        if (found == ranked.end()) ranked.push_back({entry, 1});
+        else ++found->visits;
+    }
+    std::stable_sort(ranked.begin(), ranked.end(), [](const auto &left, const auto &right) {
+        if (left.visits != right.visits) return left.visits > right.visits;
+        return left.entry.visited_at > right.entry.visited_at;
+    });
+    unsigned shown = 0;
+    for (const auto &candidate : ranked) {
+        const auto &entry = candidate.entry;
         std::string searchable = entry.title + " " + entry.uri;
         std::ranges::transform(searchable, searchable.begin(), [](unsigned char value) { return std::tolower(value); });
-        if (searchable.find(needle) == std::string::npos || std::ranges::find(seen, entry.uri) != seen.end()) continue;
-        seen.push_back(entry.uri);
+        if (searchable.find(needle) == std::string::npos) continue;
         auto *button = gtk_button_new();
         gtk_widget_add_css_class(button, "address-suggestion");
         auto *labels = gtk_box_new(GTK_ORIENTATION_VERTICAL, 1);
