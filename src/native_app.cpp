@@ -1692,8 +1692,24 @@ void suggestion_panel_left(GtkEventControllerMotion *, WindowState *state) {
     state->suggestions_hovered = false;
 }
 
+void activate_suggestion_row(GtkWidget *button) {
+    auto *parent = gtk_widget_get_parent(button);
+    if (!parent) return;
+    for (auto *row = gtk_widget_get_first_child(parent); row;
+         row = gtk_widget_get_next_sibling(row))
+        gtk_widget_remove_css_class(row, "active");
+    gtk_widget_add_css_class(button, "active");
+}
+
 void suggestion_row_entered(GtkEventControllerMotion *, double, double, GtkWidget *button) {
-    gtk_widget_grab_focus(button);
+    // A popup can appear beneath a stationary pointer and immediately emit a
+    // motion event. Keep hover and keyboard highlighting in sync without
+    // allowing that synthetic motion to take focus from the address entry.
+    activate_suggestion_row(button);
+}
+
+void suggestion_row_focus_changed(GObject *, GParamSpec *, GtkWidget *button) {
+    if (gtk_widget_has_focus(button)) activate_suggestion_row(button);
 }
 
 void dismiss_suggestions_on_click(GtkGestureClick *, int, double, double, WindowState *state) {
@@ -1839,6 +1855,7 @@ void address_changed(GtkEditable *editable, WindowState *state) {
         g_object_set_data_full(G_OBJECT(button), "suggestion-uri", g_strdup(entry.uri.c_str()), g_free);
         g_object_set_data(G_OBJECT(button), "window-state", state);
         g_signal_connect(button, "clicked", G_CALLBACK(history_suggestion_clicked), state);
+        g_signal_connect(button, "notify::has-focus", G_CALLBACK(suggestion_row_focus_changed), button);
         auto *keys = gtk_event_controller_key_new();
         g_signal_connect(keys, "key-pressed", G_CALLBACK(suggestion_key_pressed), button);
         gtk_widget_add_controller(button, keys);
@@ -2346,7 +2363,7 @@ void install_style(GtkWidget *window) {
         ".toolbar entry.suggestions-open:focus { border-color: #ff8a62; border-bottom-color: transparent; box-shadow: none; }"
         ".address-suggestions { padding: 7px; border: 1px solid #45433f; border-top: 0; border-radius: 0 0 8px 8px; background: #191918; box-shadow: 0 4px 10px #0006; }"
         ".address-suggestion { min-width: 0; padding: 8px 11px; border: 0; border-radius: 7px; background: transparent; color: #eee9df; box-shadow: none; }"
-        ".address-suggestion:hover, .address-suggestion:focus { background: #45433f; outline: 1px solid #74b928; outline-offset: -1px; }.address-suggestion .suggestion-uri { color: #aaa59c; font-size: 12px; }"
+        ".address-suggestion.active { background: #45433f; }.address-suggestion .suggestion-uri { color: #aaa59c; font-size: 12px; }"
         ".address-bookmark { margin-right: 4px; }"
         ".site-information { margin-left: 4px; }"
         ".site-information-popover contents { padding: 12px; border: 1px solid #474641; border-radius: 12px; background: #2c2c2c; }"
