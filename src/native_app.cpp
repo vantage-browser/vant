@@ -96,6 +96,9 @@ struct WindowState {
     bool suggestions_hovered{};
     bool force_address_suggestions{};
     bool address_submission_dismissed{};
+    bool suggestion_pointer_position_known{};
+    double suggestion_pointer_x{};
+    double suggestion_pointer_y{};
     double progress_fraction{};
     gint64 last_tab_scroll{};
     unsigned find_current{};
@@ -1759,6 +1762,7 @@ void suggestion_panel_entered(GtkEventControllerMotion *, double, double, Window
 
 void suggestion_panel_left(GtkEventControllerMotion *, WindowState *state) {
     state->suggestions_hovered = false;
+    state->suggestion_pointer_position_known = false;
 }
 
 void activate_suggestion_row(GtkWidget *button) {
@@ -1770,10 +1774,22 @@ void activate_suggestion_row(GtkWidget *button) {
     gtk_widget_add_css_class(button, "active");
 }
 
-void suggestion_row_entered(GtkEventControllerMotion *, double, double, GtkWidget *button) {
-    // A popup can appear beneath a stationary pointer and immediately emit a
-    // motion event. Keep hover and keyboard highlighting in sync without
-    // allowing that synthetic motion to take focus from the address entry.
+void suggestion_row_entered(GtkEventControllerMotion *controller, double, double, GtkWidget *button) {
+    auto *state = static_cast<WindowState *>(g_object_get_data(G_OBJECT(button), "window-state"));
+    auto *event = gtk_event_controller_get_current_event(GTK_EVENT_CONTROLLER(controller));
+    double pointer_x = 0.0;
+    double pointer_y = 0.0;
+    if (!state || !event || !gdk_event_get_position(event, &pointer_x, &pointer_y)) return;
+    if (!state->suggestion_pointer_position_known) {
+        state->suggestion_pointer_position_known = true;
+        state->suggestion_pointer_x = pointer_x;
+        state->suggestion_pointer_y = pointer_y;
+        return;
+    }
+    if (std::abs(pointer_x - state->suggestion_pointer_x) < 0.5 &&
+        std::abs(pointer_y - state->suggestion_pointer_y) < 0.5) return;
+    state->suggestion_pointer_x = pointer_x;
+    state->suggestion_pointer_y = pointer_y;
     activate_suggestion_row(button);
 }
 
