@@ -753,6 +753,39 @@ void set_vantage_menu_icon(GtkWidget *button) {
     g_object_unref(icon);
 }
 
+std::string new_tab_page(WindowState *state) {
+    std::vector<std::string> searches;
+    for (const auto &entry : state->owner->data->history()) {
+        if (entry.uri.find("google.") == std::string::npos || entry.uri.find("/search?") == std::string::npos) continue;
+        auto query = query_value(entry.uri, "q");
+        std::ranges::replace(query, '+', ' ');
+        if (query.empty() || std::ranges::find(searches, query) != searches.end()) continue;
+        searches.push_back(std::move(query));
+        if (searches.size() == 20) break;
+    }
+    std::string seed = "[";
+    for (std::size_t index = 0; index < searches.size(); ++index) {
+        if (index) seed += ',';
+        seed += javascript_string(searches[index]);
+    }
+    seed += ']';
+    return "<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
+        "<title>New Tab</title><style>html{color-scheme:dark}*{box-sizing:border-box}body{margin:0;min-height:100vh;overflow:hidden;"
+        "background:#20201f;font-family:Inter,'Avenir Next','Segoe UI',system-ui,sans-serif}.searchbox{position:relative;width:min(620px,calc(100% - 48px));margin:33.333vh auto 0;transform:translateY(-24px)}"
+        "input{width:100%;height:48px;padding:0 20px;border:1px solid #4a4844;border-radius:10px 0 10px 0;outline:none;background:#2b2a29;color:#fff;font:16px Inter,'Avenir Next','Segoe UI',system-ui,sans-serif;box-shadow:0 6px 16px #0003}"
+        "input::placeholder{color:#aaa59c}input:focus{border-color:#ff8a62;box-shadow:0 0 0 1px #ff8a62,0 6px 16px #0004}input.open{border-radius:10px 0 0 0;border-bottom-color:transparent;box-shadow:none}"
+        ".suggestions{display:none;border:1px solid #4a4844;border-top:0;border-radius:0 0 10px 0;background:#2b2a29;padding:6px;box-shadow:0 4px 10px #0005}.suggestions.open{display:block}"
+        ".item{padding:9px 13px;border-radius:6px;color:#eee9df;cursor:default}.item.active{background:#45433f;outline:1px solid #74b928;outline-offset:-1px}.item small{display:block;margin-top:2px;color:#aaa59c}"
+        "</style></head><body><form class=searchbox id=searchForm action='https://www.google.com/search' method=get><input id=searchInput name=q type=search autocomplete=off spellcheck=false placeholder='Search' aria-label='Search'><div id=suggestions class=suggestions></div></form>"
+        "<script>const seed=" + seed + ";let saved=[];try{saved=JSON.parse(localStorage.getItem('vant-search-history')||'[]')}catch(e){}let history=[...new Set([...saved,...seed])].slice(0,40),shown=[],active=-1;"
+        "const input=searchInput,panel=suggestions,form=searchForm;function closeList(){panel.classList.remove('open');input.classList.remove('open');active=-1}"
+        "function paint(){[...panel.children].forEach((e,i)=>e.classList.toggle('active',i===active))}function showList(){const q=input.value.trim().toLowerCase();shown=history.filter(v=>!q||v.toLowerCase().includes(q)).slice(0,8);panel.replaceChildren(...shown.map((v,i)=>{const d=document.createElement('div');d.className='item';d.innerHTML='<span></span><small>Google Search</small>';d.firstChild.textContent=v;d.onpointermove=()=>{active=i;paint()};d.onmousedown=e=>e.preventDefault();d.onclick=()=>choose(i);return d}));if(shown.length){panel.classList.add('open');input.classList.add('open')}else closeList();paint()}"
+        "function remember(v){v=v.trim();if(!v)return;history=[v,...history.filter(x=>x!==v)].slice(0,40);try{localStorage.setItem('vant-search-history',JSON.stringify(history))}catch(e){}}function choose(i){if(i<0||i>=shown.length)return;input.value=shown[i];remember(input.value);closeList();form.submit()}"
+        "input.oninput=showList;input.onfocus=()=>{if(input.value)showList()};input.onkeydown=e=>{if(e.key==='ArrowDown'){e.preventDefault();if(!panel.classList.contains('open'))showList();if(shown.length){active=Math.min(active+1,shown.length-1);paint()}}else if(e.key==='ArrowUp'){e.preventDefault();if(shown.length){active=active<=0?0:active-1;paint()}}else if(e.key==='Enter'&&active>=0){e.preventDefault();choose(active)}else if(e.key==='Escape')closeList()};"
+        "form.onsubmit=()=>{remember(input.value);closeList()};document.onmousedown=e=>{if(!form.contains(e.target))closeList()};window.onblur=closeList;"
+        "</script></body></html>";
+}
+
 void load_decision(TabState *tab, const vantage::NavigationDecision &decision) {
     if (decision.kind == vantage::NavigationKind::web) {
         tab->internal_uri.clear();
@@ -771,17 +804,10 @@ void load_decision(TabState *tab, const vantage::NavigationDecision &decision) {
         if (decision.uri != "vantage:new" && !decision.uri.starts_with("about:")) {
             const auto page = internal_page(tab->window, decision.uri);
             webkit_web_view_load_html(tab->view, page.c_str(), nullptr);
-        } else webkit_web_view_load_html(tab->view,
-            "<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
-            "<title>New Tab</title><style>html{color-scheme:dark}*{box-sizing:border-box}body{margin:0;min-height:100vh;"
-            "display:grid;place-items:center;background:#20201f;font-family:Inter,'Avenir Next','Segoe UI',system-ui,sans-serif}"
-            "form{width:min(620px,calc(100% - 48px))}input{width:100%;height:48px;padding:0 20px;border:1px solid #4a4844;"
-            "border-radius:24px;outline:none;background:#2b2a29;color:#fff;font:16px Inter,'Avenir Next','Segoe UI',system-ui,sans-serif;"
-            "box-shadow:0 8px 24px #0004}input::placeholder{color:#aaa59c}input:focus{border-color:#ff8a62;"
-            "box-shadow:0 0 0 1px #ff8a62,0 8px 24px #0005}</style></head><body>"
-            "<form action='https://www.google.com/search' method=get><input name=q type=search autocomplete=off spellcheck=false "
-            "placeholder='Search' aria-label='Search'></form></body></html>",
-            nullptr);
+        } else {
+            const auto page = new_tab_page(tab->window);
+            webkit_web_view_load_html(tab->view, page.c_str(), nullptr);
+        }
         if (tab->window->view == tab->view) {
             const char *shown = decision.uri == "vantage:new" ? "" : decision.uri.c_str();
             gtk_editable_set_text(GTK_EDITABLE(tab->window->address), shown);
@@ -1757,7 +1783,7 @@ void address_changed(GtkEditable *editable, WindowState *state) {
         g_signal_connect(keys, "key-pressed", G_CALLBACK(suggestion_key_pressed), button);
         gtk_widget_add_controller(button, keys);
         auto *motion = gtk_event_controller_motion_new();
-        g_signal_connect(motion, "enter", G_CALLBACK(suggestion_row_entered), button);
+        g_signal_connect(motion, "motion", G_CALLBACK(suggestion_row_entered), button);
         gtk_widget_add_controller(button, motion);
         gtk_box_append(GTK_BOX(state->address_suggestions), button);
         if (++shown == 8) break;
