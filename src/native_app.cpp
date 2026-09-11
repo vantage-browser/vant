@@ -49,6 +49,7 @@ struct WindowState {
     GtkApplication *application{};
     GtkWidget *window{};
     GtkWidget *address{};
+    GtkWidget *chrome_overlay{};
     GtkWidget *address_popover{};
     GtkWidget *address_suggestions{};
     GtkWidget *reload_stop{};
@@ -87,6 +88,7 @@ struct WindowState {
     bool private_mode{};
     bool closed{};
     bool new_tab_hovered{};
+    bool suggestions_hovered{};
     double progress_fraction{};
     gint64 last_tab_scroll{};
     unsigned find_current{};
@@ -718,6 +720,38 @@ TabState *find_tab(WindowState *state, WebKitWebView *view) {
     return found == state->tabs.end() ? nullptr : found->get();
 }
 
+GIcon *vantage_mark(bool white) {
+    static constexpr std::string_view orange =
+        "<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'>"
+        "<defs><linearGradient id='g' x1='5' y1='2' x2='25' y2='30' gradientUnits='userSpaceOnUse'>"
+        "<stop stop-color='#ffb07c'/><stop offset='.48' stop-color='#ff825f'/><stop offset='1' stop-color='#ff604d'/></linearGradient></defs>"
+        "<path fill='url(#g)' d='M2.5 3h7l6.5 18.2L22.5 3h7L19.7 29h-7.4z'/><path fill='#ffc09a' fill-opacity='.55' d='M7.2 3h2.3L16 21.2 14.8 25z'/></svg>";
+    static constexpr std::string_view light =
+        "<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'>"
+        "<defs><linearGradient id='g' x1='5' y1='2' x2='25' y2='30' gradientUnits='userSpaceOnUse'>"
+        "<stop stop-color='#fff'/><stop offset='.55' stop-color='#f0eee9'/><stop offset='1' stop-color='#c8c5be'/></linearGradient></defs>"
+        "<path fill='url(#g)' d='M2.5 3h7l6.5 18.2L22.5 3h7L19.7 29h-7.4z'/><path fill='#fff' fill-opacity='.65' d='M7.2 3h2.3L16 21.2 14.8 25z'/></svg>";
+    const auto svg = white ? light : orange;
+    auto *bytes = g_bytes_new(svg.data(), svg.size());
+    auto *icon = g_bytes_icon_new(bytes);
+    g_bytes_unref(bytes);
+    return icon;
+}
+
+void set_vantage_image(GtkWidget *image, bool white) {
+    auto *icon = vantage_mark(white);
+    gtk_image_set_from_gicon(GTK_IMAGE(image), icon);
+    g_object_unref(icon);
+}
+
+void set_vantage_menu_icon(GtkWidget *button) {
+    auto *icon = vantage_mark(false);
+    auto *image = gtk_image_new_from_gicon(icon);
+    gtk_image_set_pixel_size(GTK_IMAGE(image), 17);
+    gtk_menu_button_set_child(GTK_MENU_BUTTON(button), image);
+    g_object_unref(icon);
+}
+
 void load_decision(TabState *tab, const vantage::NavigationDecision &decision) {
     if (decision.kind == vantage::NavigationKind::web) {
         tab->internal_uri.clear();
@@ -731,7 +765,8 @@ void load_decision(TabState *tab, const vantage::NavigationDecision &decision) {
             decision.uri == "vantage:bookmarks" ? "starred-symbolic" :
             decision.uri == "vantage:settings" ? "preferences-system-symbolic" :
             decision.uri == "vantage:about" ? "help-about-symbolic" : "web-browser-symbolic";
-        gtk_image_set_from_icon_name(GTK_IMAGE(tab->favicon), icon);
+        if (decision.uri == "vantage:new") set_vantage_image(tab->favicon, true);
+        else gtk_image_set_from_icon_name(GTK_IMAGE(tab->favicon), icon);
         if (decision.uri != "vantage:new" && !decision.uri.starts_with("about:")) {
             const auto page = internal_page(tab->window, decision.uri);
             webkit_web_view_load_html(tab->view, page.c_str(), nullptr);
@@ -873,6 +908,7 @@ void show_site_certificate(GtkButton *, WindowState *state) {
 }
 
 void update_site_information(WindowState *state, const std::string &uri) {
+    const bool new_page = uri.empty() || uri == "vantage:new";
     const bool source = uri.starts_with("source:");
     const std::string effective_uri = source ? uri.substr(7) : uri;
     std::string host = "This page";
@@ -881,9 +917,9 @@ void update_site_information(WindowState *state, const std::string &uri) {
         if (const char *value = g_uri_get_host(parsed); value && *value) host = value;
         g_uri_unref(parsed);
     }
-    gtk_label_set_text(GTK_LABEL(state->site_title), source ? "Source" : host.c_str());
+    gtk_label_set_text(GTK_LABEL(state->site_title), new_page ? "New tab" : source ? "Source" : host.c_str());
     gtk_label_set_text(GTK_LABEL(state->site_connection),
-        source ? "You're viewing the source of a web page" :
+        new_page ? "Vantage new tab" : source ? "You're viewing the source of a web page" :
         secure ? "Connection is secure" : "Connection is not secure");
     gtk_button_set_label(GTK_BUTTON(state->site_certificate),
         secure ? "View certificate" : "No secure certificate");
@@ -894,8 +930,9 @@ void update_site_information(WindowState *state, const std::string &uri) {
     gtk_widget_set_visible(state->site_certificate, !source);
     gtk_widget_set_visible(state->site_data, !source);
     gtk_widget_set_visible(state->site_clear, !source);
-    gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(state->site_button), source ?
-        "dialog-information-symbolic" : secure ? "security-high-symbolic" : "dialog-warning-symbolic");
+    if (new_page) set_vantage_menu_icon(state->site_button);
+    else gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(state->site_button), source ?
+            "dialog-information-symbolic" : secure ? "security-high-symbolic" : "dialog-warning-symbolic");
 }
 
 void sync_active_chrome(WindowState *state) {
@@ -1561,8 +1598,39 @@ void hide_address_suggestions(WindowState *state) {
 }
 
 void show_address_suggestions(WindowState *state) {
+    graphene_rect_t bounds;
+    if (state->chrome_overlay && gtk_widget_compute_bounds(state->address, state->chrome_overlay, &bounds)) {
+        const int width = gtk_widget_get_width(state->chrome_overlay);
+        const int left = static_cast<int>(std::round(bounds.origin.x));
+        const int right = std::max(0, width - static_cast<int>(std::round(bounds.origin.x + bounds.size.width)));
+        gtk_widget_set_margin_start(state->address_popover, left);
+        gtk_widget_set_margin_end(state->address_popover, right);
+        gtk_widget_set_margin_top(state->address_popover,
+            static_cast<int>(std::round(bounds.origin.y + bounds.size.height)) - 1);
+    }
     gtk_widget_add_css_class(state->address, "suggestions-open");
     gtk_widget_set_visible(state->address_popover, TRUE);
+}
+
+void suggestion_panel_entered(GtkEventControllerMotion *, double, double, WindowState *state) {
+    state->suggestions_hovered = true;
+}
+
+void suggestion_panel_left(GtkEventControllerMotion *, WindowState *state) {
+    state->suggestions_hovered = false;
+}
+
+void suggestion_row_entered(GtkEventControllerMotion *, double, double, GtkWidget *button) {
+    gtk_widget_grab_focus(button);
+}
+
+void dismiss_suggestions_on_click(GtkGestureClick *, int, double, double, WindowState *state) {
+    if (gtk_widget_get_visible(state->address_popover) && !state->suggestions_hovered)
+        hide_address_suggestions(state);
+}
+
+void window_active_changed(GObject *window, GParamSpec *, WindowState *state) {
+    if (!gtk_window_is_active(GTK_WINDOW(window))) hide_address_suggestions(state);
 }
 
 void history_suggestion_clicked(GtkButton *button, WindowState *state) {
@@ -1681,6 +1749,9 @@ void address_changed(GtkEditable *editable, WindowState *state) {
         auto *keys = gtk_event_controller_key_new();
         g_signal_connect(keys, "key-pressed", G_CALLBACK(suggestion_key_pressed), button);
         gtk_widget_add_controller(button, keys);
+        auto *motion = gtk_event_controller_motion_new();
+        g_signal_connect(motion, "enter", G_CALLBACK(suggestion_row_entered), button);
+        gtk_widget_add_controller(button, motion);
         gtk_box_append(GTK_BOX(state->address_suggestions), button);
         if (++shown == 8) break;
     }
@@ -2180,9 +2251,9 @@ void install_style(GtkWidget *window) {
         ".toolbar entry:focus { border-color: #ff8a62; box-shadow: 0 0 0 1px #ff8a62; }"
         ".address-wrap entry.suggestions-open { border-radius: 8px 8px 0 0; border-bottom-color: transparent; }"
         ".toolbar entry.suggestions-open:focus { border-color: #ff8a62; border-bottom-color: transparent; box-shadow: none; }"
-        ".address-suggestions { padding: 7px; border: 1px solid #45433f; border-top: 0; border-radius: 0 0 8px 8px; background: #191918; box-shadow: 0 8px 20px #0009; }"
+        ".address-suggestions { padding: 7px; border: 1px solid #45433f; border-top: 0; border-radius: 0 0 8px 8px; background: #191918; box-shadow: 0 4px 10px #0006; }"
         ".address-suggestion { min-width: 0; padding: 8px 11px; border: 0; border-radius: 7px; background: transparent; color: #eee9df; box-shadow: none; }"
-        ".address-suggestion:hover { background: #45433f; }.address-suggestion .suggestion-uri { color: #aaa59c; font-size: 12px; }"
+        ".address-suggestion:hover, .address-suggestion:focus { background: #45433f; outline: 1px solid #74b928; outline-offset: -1px; }.address-suggestion .suggestion-uri { color: #aaa59c; font-size: 12px; }"
         ".address-bookmark { margin-right: 4px; }"
         ".site-information { margin-left: 4px; }"
         ".site-information-popover contents { padding: 12px; border: 1px solid #474641; border-radius: 12px; background: #2c2c2c; }"
@@ -2374,6 +2445,10 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     state->address_suggestions = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
     gtk_box_append(GTK_BOX(state->address_popover), state->address_suggestions);
     gtk_widget_set_visible(state->address_popover, FALSE);
+    auto *suggestion_motion = gtk_event_controller_motion_new();
+    g_signal_connect(suggestion_motion, "enter", G_CALLBACK(suggestion_panel_entered), state);
+    g_signal_connect(suggestion_motion, "leave", G_CALLBACK(suggestion_panel_left), state);
+    gtk_widget_add_controller(state->address_popover, suggestion_motion);
     state->bookmark_button = icon_button("non-starred-symbolic", "Bookmark this tab");
     gtk_widget_add_css_class(state->bookmark_button, "address-bookmark");
     gtk_widget_set_halign(state->bookmark_button, GTK_ALIGN_END);
@@ -2452,15 +2527,14 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     gtk_widget_set_vexpand(page_overlay, TRUE);
     gtk_overlay_set_child(GTK_OVERLAY(page_overlay), state->stack);
     gtk_overlay_add_overlay(GTK_OVERLAY(page_overlay), state->find_bar);
-    gtk_widget_set_halign(state->address_popover, GTK_ALIGN_FILL);
-    gtk_widget_set_valign(state->address_popover, GTK_ALIGN_START);
-    gtk_widget_set_margin_start(state->address_popover, 140);
-    gtk_widget_set_margin_end(state->address_popover, 100);
-    gtk_widget_set_margin_top(state->address_popover, 0);
-    gtk_overlay_add_overlay(GTK_OVERLAY(page_overlay), state->address_popover);
     gtk_box_append(GTK_BOX(layout), navigation);
     gtk_box_append(GTK_BOX(layout), page_overlay);
-    gtk_window_set_child(GTK_WINDOW(state->window), layout);
+    state->chrome_overlay = gtk_overlay_new();
+    gtk_overlay_set_child(GTK_OVERLAY(state->chrome_overlay), layout);
+    gtk_widget_set_halign(state->address_popover, GTK_ALIGN_FILL);
+    gtk_widget_set_valign(state->address_popover, GTK_ALIGN_START);
+    gtk_overlay_add_overlay(GTK_OVERLAY(state->chrome_overlay), state->address_popover);
+    gtk_window_set_child(GTK_WINDOW(state->window), state->chrome_overlay);
     install_style(state->window);
 
     g_signal_connect(back, "clicked", G_CALLBACK(go_back), state);
@@ -2468,6 +2542,11 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     g_signal_connect(state->reload_stop, "clicked", G_CALLBACK(reload_or_stop), state);
     g_signal_connect(state->address, "activate", G_CALLBACK(submit_address), state);
     g_signal_connect(state->address, "changed", G_CALLBACK(address_changed), state);
+    auto *dismiss_click = gtk_gesture_click_new();
+    gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(dismiss_click), GTK_PHASE_CAPTURE);
+    g_signal_connect(dismiss_click, "pressed", G_CALLBACK(dismiss_suggestions_on_click), state);
+    gtk_widget_add_controller(state->window, GTK_EVENT_CONTROLLER(dismiss_click));
+    g_signal_connect(state->window, "notify::is-active", G_CALLBACK(window_active_changed), state);
     auto *address_keys = gtk_event_controller_key_new();
     gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(address_keys), GTK_PHASE_CAPTURE);
     g_signal_connect(address_keys, "key-pressed", G_CALLBACK(address_key_pressed), state);
