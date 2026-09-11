@@ -95,6 +95,7 @@ struct WindowState {
     bool new_tab_hovered{};
     bool suggestions_hovered{};
     bool force_address_suggestions{};
+    bool address_submission_dismissed{};
     double progress_fraction{};
     gint64 last_tab_scroll{};
     unsigned find_current{};
@@ -868,6 +869,7 @@ void load_decision(TabState *tab, const vantage::NavigationDecision &decision) {
 }
 
 void submit_address(GtkEntry *, WindowState *state) {
+    state->address_submission_dismissed = true;
     hide_address_suggestions(state);
     const char *text = gtk_editable_get_text(GTK_EDITABLE(state->address));
     if (auto *tab = find_tab(state, state->view)) {
@@ -1814,9 +1816,11 @@ gboolean suggestion_key_pressed(GtkEventControllerKey *, guint key, guint, GdkMo
 gboolean address_key_pressed(GtkEventControllerKey *, guint key, guint, GdkModifierType modifiers,
                              WindowState *state) {
     if (key == GDK_KEY_Return || key == GDK_KEY_KP_Enter) {
+        state->address_submission_dismissed = true;
         hide_address_suggestions(state);
         return FALSE;
     }
+    state->address_submission_dismissed = false;
     if (key == GDK_KEY_Tab || key == GDK_KEY_ISO_Left_Tab) {
         const bool reverse = key == GDK_KEY_ISO_Left_Tab || (modifiers & GDK_SHIFT_MASK) != 0;
         gtk_widget_grab_focus(reverse ? state->site_button : state->bookmark_button);
@@ -1879,6 +1883,10 @@ gboolean toolbar_focus_key(GtkEventControllerKey *controller, guint key, guint,
 }
 
 void address_changed(GtkEditable *editable, WindowState *state) {
+    if (state->address_submission_dismissed) {
+        hide_address_suggestions(state);
+        return;
+    }
     auto *focus = gtk_root_get_focus(GTK_ROOT(state->window));
     if (!focus || (focus != state->address && !gtk_widget_is_ancestor(focus, state->address))) {
         hide_address_suggestions(state);
@@ -2348,6 +2356,7 @@ gboolean key_pressed(GtkEventControllerKey *, guint keyval, guint,
         return TRUE;
     }
     if (control && (keyval == GDK_KEY_l || keyval == GDK_KEY_L)) {
+        state->address_submission_dismissed = false;
         gtk_widget_grab_focus(state->address);
         gtk_editable_select_region(GTK_EDITABLE(state->address), 0, -1);
         return TRUE;
