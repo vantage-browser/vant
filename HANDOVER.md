@@ -86,6 +86,11 @@ versions, migrations, corruption handling and bounded retention.
   on the same machine, pages, network conditions and cold/warm state.
 - No telemetry, account or cloud dependency by default.
 - No blue product palette. The UI should remain neutral, dark and restrained.
+- Compatibility video rendering is enabled by default because it resolved
+  audio-without-video and unstable media sizing during the initial Omarchy VM
+  trial. Users may persistently opt into accelerated rendering from Settings or
+  with `vant settings video-rendering accelerated`. The change takes effect on
+  the next launch because WebKit reads the compositing environment at startup.
 - Keyboard operation is first-class, but every essential action also remains
   discoverable and accessible without memorised shortcuts.
 - Restore safely after a crash; never trade user data integrity for startup
@@ -105,8 +110,10 @@ Current local baseline (2026-09-10): V0-V1 have accepted managed-Linux build
 evidence, V2-V5 and V7 have accepted independently testable core evidence, and
 V6 is accepted with a deterministic JS++ snapshot. The native executable links
 GTK 4.14.5 and WebKitGTK 2.52.3 and the runtime probe passes. This container
-forbids the display socket required by Xvfb, so real WebKit navigation, native
-tab binding and Wayland/Omarchy interaction evidence remain pending. Do not
+forbids the display socket required by Xvfb. A later Omarchy QEMU/KVM trial
+established successful build, launch, authenticated X browsing, YouTube playback
+and X playback under compatibility rendering; broader real-hardware interaction
+evidence, native tab binding and sustained-use evidence remain pending. Do not
 collapse these bounded results into a claim that V0-V7 are target-platform
 complete or that Vantage is ready for daily use.
 

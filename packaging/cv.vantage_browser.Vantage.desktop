@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Vantage Browser
+GenericName=Web Browser
+Comment=Browse the web with Vantage
+Exec=vant %U
+Icon=cv.vantage_browser.Vantage
+Terminal=false
+StartupNotify=true
+StartupWMClass=cv.vantage_browser.Vantage
+Categories=Network;WebBrowser;
+MimeType=x-scheme-handler/http;x-scheme-handler/https;text/html;
+Keywords=web;browser;internet;

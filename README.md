@@ -33,6 +33,13 @@ provide `libwebkitgtk-6.0-dev` are not supported by this development baseline.
 sudo pacman -S --needed base-devel pkgconf python gtk4 webkitgtk-6.0 sqlite
 ```
 
+Install the normal GStreamer media set for broad audio and video support:
+
+```sh
+sudo pacman -S --needed gst-plugins-base gst-plugins-good \
+  gst-plugins-bad gst-plugins-ugly gst-libav
+```
+
 Confirm that the native packages are visible:
 
 ```sh
@@ -72,6 +79,20 @@ Wayland while diagnosing desktop integration:
 GDK_BACKEND=wayland ./build/vant
 ```
 
+Vantage uses compatibility video rendering by default. It avoids blank or
+flickering video observed with some graphics drivers and virtual machines. Try
+accelerated rendering from the internal Settings page, or configure it from the
+command line:
+
+```sh
+./build/vant settings video-rendering compatibility
+./build/vant settings video-rendering accelerated
+```
+
+The saved preference applies on the next launch. For one launch only, use
+`--compatibility-video-rendering` (also available as `--fix-broken-video`) or
+`--accelerated-video-rendering`.
+
 ## Test
 
 ```sh
@@ -103,8 +124,12 @@ make smoke-native
 ```sh
 ./build/vant --version
 ./build/vant --native-probe
+./build/vant settings video-rendering compatibility
 make clean
 ```
+
+Desktop integration files are retained under `packaging/`. Public installation
+and user documentation live at [vant.cx](https://vant.cx).
 
 The architecture, security boundary, checkpoint status and release procedure
 are maintained in [HANDOVER.md](HANDOVER.md). More focused notes live under

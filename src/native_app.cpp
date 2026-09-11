@@ -1,6 +1,7 @@
 #include "native_app.h"
 
 #include "navigation.h"
+#include "preferences.h"
 #include "user_data.h"
 
 #include <gtk/gtk.h>
@@ -686,7 +687,14 @@ std::string internal_page(WindowState *state, std::string_view uri) {
         if (content.empty()) content = "<p class=empty>No downloads yet.</p>";
     } else if (uri == "vantage:settings") {
         title = "Settings";
-        content = "<div class=item><strong>Privacy by default</strong><span>Vantage does not include telemetry. Private windows use ephemeral storage and do not write browsing history.</span></div>";
+        const bool compatibility = vantage::compatibility_video_rendering();
+        content = "<div class=item><div class=details><strong>Compatibility video rendering</strong><span>"
+            + std::string(compatibility
+                ? "Enabled · Uses the broadly compatible rendering path so video works reliably."
+                : "Disabled · Uses accelerated compositing for potentially better performance.")
+            + " Changes apply the next time Vantage opens.</span></div><a class=setting href='vantage:video-rendering?mode="
+            + (compatibility ? "accelerated'>Use accelerated" : "compatibility'>Use compatibility")
+            + "</a></div><div class=item><strong>Privacy by default</strong><span>Vantage does not include telemetry. Private windows use ephemeral storage and do not write browsing history.</span></div>";
     } else {
         title = "About Vantage";
         content = "<div class=item><strong>Vantage Browser</strong><span>A lightweight, privacy-focused WebKit browser.</span></div>";
@@ -702,7 +710,7 @@ std::string internal_page(WindowState *state, std::string_view uri) {
         "border:1px solid #403e3a;border-radius:11px;background:#292827;color:inherit}.item:hover{border-color:#67635d;background:#302f2d}"
         ".pick{width:17px;height:17px;accent-color:#ff7657}.favicon{width:20px;height:20px;object-fit:contain}.fallback{width:20px;text-align:center;color:#8b8881}"
         ".details{display:flex;flex:1;min-width:0;flex-direction:column;gap:4px;color:inherit;text-decoration:none}.details strong,.details span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}"
-        ".item span,.empty{color:#aaa59c}.actions{display:flex;gap:4px}.actions a{display:grid;place-items:center;width:34px;height:34px;background:transparent;color:#c9c4ba;text-decoration:none}.actions svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.actions a:hover{color:#ff8a62}.bulk,.form button{border:0;border-radius:7px;background:#3b3936;color:#eee9df;padding:8px 11px;cursor:pointer}.bulk:hover,.form button:hover{background:#4b4844}.fileicon{display:grid;place-items:center;width:42px;height:46px;border-radius:6px;background:#3f9e91;color:#fff!important;font:bold 10px ui-monospace,monospace;text-transform:uppercase}"
+        ".item span,.empty{color:#aaa59c}.actions{display:flex;gap:4px}.actions a{display:grid;place-items:center;width:34px;height:34px;background:transparent;color:#c9c4ba;text-decoration:none}.actions svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.actions a:hover{color:#ff8a62}.bulk,.form button,.setting{border:0;border-radius:7px;background:#3b3936;color:#eee9df;padding:8px 11px;cursor:pointer;text-decoration:none;white-space:nowrap}.bulk:hover,.form button:hover,.setting:hover{background:#4b4844;color:#ff9a76}.fileicon{display:grid;place-items:center;width:42px;height:46px;border-radius:6px;background:#3f9e91;color:#fff!important;font:bold 10px ui-monospace,monospace;text-transform:uppercase}"
         ".add{margin-bottom:16px}.add summary,.edit summary{cursor:pointer;color:#ccc7bd}.form{display:flex;gap:8px;margin-top:10px}.form input{flex:1;border-radius:8px}.edit{max-width:60px}.edit[open]{max-width:100%;flex:1}"
         ".rowmenu{position:relative}.rowmenu summary{list-style:none;cursor:pointer;font-size:22px;padding:4px 8px}.rowmenu summary::-webkit-details-marker{display:none}.rowmenu>div{position:absolute;z-index:2;right:0;top:32px;width:170px;padding:6px;background:#343331;border:1px solid #4d4a45;border-radius:8px;box-shadow:0 8px 24px #0008}.rowmenu button,.rowmenu a{display:block;width:100%;padding:9px;border:0;background:transparent;color:#eee9df;text-align:left;text-decoration:none}.rowmenu button:hover,.rowmenu a:hover{color:#ff8a62}"
         ".history-day{margin:0 0 16px;border:1px solid #403e3a;border-radius:11px;background:#292827;overflow:visible}.history-day h2{margin:0;padding:14px 16px 9px;font-size:14px}.history-list{padding:0 8px 8px}.history-item{gap:10px;margin:0;padding:7px 8px;border:0;border-radius:7px;background:transparent}.history-item:hover{border:0;background:#353432}.history-item time{width:76px;flex:none;color:#aaa59c;font-size:12px}.history-item .favicon,.history-item .fallback{width:17px;height:17px}.history-details{flex-direction:row;align-items:baseline;gap:8px}.history-details strong{font-size:13px}.history-details span{font-size:12px}.history-item .rowmenu summary{font-size:19px;padding:1px 6px}"
@@ -1244,6 +1252,19 @@ gboolean decide_policy(WebKitWebView *view, WebKitPolicyDecision *decision,
             }
             webkit_policy_decision_ignore(decision);
             load_decision(tab, tab->window->policy.resolve("vantage:bookmarks"));
+            return TRUE;
+        }
+        if (target.starts_with("vantage:video-rendering")) {
+            const auto mode = query_value(target, "mode");
+            if (mode == "compatibility" || mode == "accelerated") {
+                try {
+                    vantage::set_compatibility_video_rendering(mode == "compatibility");
+                } catch (const std::exception &error) {
+                    g_warning("Unable to save video rendering preference: %s", error.what());
+                }
+            }
+            webkit_policy_decision_ignore(decision);
+            load_decision(tab, tab->window->policy.resolve("vantage:settings"));
             return TRUE;
         }
         if (target.starts_with("vantage:download-")) {
