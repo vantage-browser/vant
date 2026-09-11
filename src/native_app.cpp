@@ -2123,8 +2123,8 @@ void install_style(GtkWidget *window) {
     auto *provider = gtk_css_provider_new();
     gtk_css_provider_load_from_string(provider,
         "window { background: #171716; color: #ece8df; }"
-        ".vantage-titlebar { min-height: 34px; padding: 0 6px; background: #242423; box-shadow: inset 0 -1px #393936; border: 0; }"
-        ".vantage-titlebar.private-header { background: #2d2927; }"
+        "headerbar { min-height: 34px; padding: 0 6px; background: #242423; box-shadow: inset 0 -1px #393936; border: 0; }"
+        "headerbar.private-header { background: #2d2927; }"
         ".tab-strip { margin-top: 2px; }"
         ".browser-tab { min-width: 184px; margin-right: 0; background: transparent; }"
         ".browser-tab-body { background: transparent; }"
@@ -2206,9 +2206,9 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     gtk_window_set_default_size(GTK_WINDOW(state->window),
         source_width > 0 ? source_width : 1100, source_height > 0 ? source_height : 760);
 
-    auto *header = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
-    gtk_widget_add_css_class(header, "vantage-titlebar");
+    auto *header = gtk_header_bar_new();
     if (private_mode) gtk_widget_add_css_class(header, "private-header");
+    gtk_header_bar_set_show_title_buttons(GTK_HEADER_BAR(header), TRUE);
     auto *tab_strip = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
     gtk_widget_add_css_class(tab_strip, "tab-strip");
     state->tab_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
@@ -2245,10 +2245,8 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     gtk_box_append(GTK_BOX(tab_strip), state->tab_scroller);
     gtk_widget_set_hexpand(tab_strip, TRUE);
     gtk_widget_set_halign(tab_strip, GTK_ALIGN_FILL);
-    gtk_box_append(GTK_BOX(header), tab_strip);
-    auto *window_controls = gtk_window_controls_new(GTK_PACK_END);
-    gtk_widget_set_valign(window_controls, GTK_ALIGN_CENTER);
-    gtk_box_append(GTK_BOX(header), window_controls);
+    gtk_header_bar_pack_start(GTK_HEADER_BAR(header), tab_strip);
+    gtk_header_bar_set_title_widget(GTK_HEADER_BAR(header), gtk_label_new(""));
     auto *header_middle = gtk_gesture_click_new();
     gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(header_middle), GDK_BUTTON_MIDDLE);
     gtk_gesture_single_set_exclusive(GTK_GESTURE_SINGLE(header_middle), TRUE);
