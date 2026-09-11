@@ -16,7 +16,7 @@ struct NavigationDecision {
 
 class NavigationPolicy {
 public:
-    explicit NavigationPolicy(std::string search_template = "https://www.google.com/search?q={query}");
+    explicit NavigationPolicy(std::string search_template = "https://search.brave.com/search?q={query}");
     NavigationDecision resolve(std::string_view input) const;
     bool allow_tls_error_bypass() const noexcept { return false; }
     bool open_popup_as_tab() const noexcept { return true; }
