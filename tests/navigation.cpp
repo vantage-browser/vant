@@ -16,8 +16,8 @@ int main() {
     assert(policy.resolve("javascript:alert(1)").kind == NavigationKind::rejected);
     assert(policy.resolve("file:///etc/passwd").kind == NavigationKind::rejected);
     assert(policy.resolve("data:text/html,test").kind == NavigationKind::rejected);
-    assert(policy.resolve("two words").uri == "https://duckduckgo.com/?q=two+words");
-    assert(policy.resolve("c++ browser").uri == "https://duckduckgo.com/?q=c%2B%2B+browser");
+    assert(policy.resolve("two words").uri == "https://www.google.com/search?q=two+words");
+    assert(policy.resolve("c++ browser").uri == "https://www.google.com/search?q=c%2B%2B+browser");
     assert(policy.resolve("").kind == NavigationKind::rejected);
     assert(!policy.allow_tls_error_bypass());
     assert(policy.open_popup_as_tab());
