@@ -98,6 +98,7 @@ struct WindowState {
     bool force_address_suggestions{};
     bool address_submission_dismissed{};
     bool suggestion_pointer_position_known{};
+    int active_suggestion{-1};
     double suggestion_pointer_x{};
     double suggestion_pointer_y{};
     double progress_fraction{};
@@ -116,12 +117,17 @@ struct ApplicationState {
     bool fullscreen{};
     bool app_mode{};
     bool private_mode{};
+    WebKitNetworkSession *network_session{};
     TabState *dragging_tab{};
     bool tab_drop_completed{};
     bool tab_drag_cancelled{};
     std::unique_ptr<vantage::UserDataStore> data;
     std::vector<DownloadContext *> active_downloads;
     std::vector<std::unique_ptr<WindowState>> windows;
+    ~ApplicationState() {
+        windows.clear();
+        if (network_session) g_object_unref(network_session);
+    }
 };
 
 void sync_active_chrome(WindowState *state);
@@ -1858,6 +1864,7 @@ void clear_box(GtkWidget *box) {
 void hide_address_suggestions(WindowState *state) {
     gtk_widget_set_visible(state->address_popover, FALSE);
     gtk_widget_remove_css_class(state->address, "suggestions-open");
+    state->active_suggestion = -1;
 }
 
 void show_address_suggestions(WindowState *state) {
@@ -1887,10 +1894,21 @@ void suggestion_panel_left(GtkEventControllerMotion *, WindowState *state) {
 void activate_suggestion_row(GtkWidget *button) {
     auto *parent = gtk_widget_get_parent(button);
     if (!parent) return;
+    auto *state = static_cast<WindowState *>(g_object_get_data(G_OBJECT(button), "window-state"));
+    int index = 0;
     for (auto *row = gtk_widget_get_first_child(parent); row;
-         row = gtk_widget_get_next_sibling(row))
+         row = gtk_widget_get_next_sibling(row), ++index) {
         gtk_widget_remove_css_class(row, "active");
+        if (row == button && state) state->active_suggestion = index;
+    }
     gtk_widget_add_css_class(button, "active");
+}
+
+GtkWidget *suggestion_at(WindowState *state, int index) {
+    if (index < 0) return nullptr;
+    auto *row = gtk_widget_get_first_child(state->address_suggestions);
+    while (row && index-- > 0) row = gtk_widget_get_next_sibling(row);
+    return row;
 }
 
 void suggestion_row_entered(GtkEventControllerMotion *controller, double, double, GtkWidget *button) {
@@ -1912,10 +1930,6 @@ void suggestion_row_entered(GtkEventControllerMotion *controller, double, double
     activate_suggestion_row(button);
 }
 
-void suggestion_row_focus_changed(GObject *, GParamSpec *, GtkWidget *button) {
-    if (gtk_widget_has_focus(button)) activate_suggestion_row(button);
-}
-
 void dismiss_suggestions_on_click(GtkGestureClick *, int, double, double, WindowState *state) {
     if (gtk_widget_get_visible(state->address_popover) && !state->suggestions_hovered)
         hide_address_suggestions(state);
@@ -1933,24 +1947,15 @@ void history_suggestion_clicked(GtkButton *button, WindowState *state) {
     submit_address(nullptr, state);
 }
 
-gboolean suggestion_key_pressed(GtkEventControllerKey *, guint key, guint, GdkModifierType,
-                                GtkWidget *button) {
-    if (key == GDK_KEY_Down) {
-        if (auto *next = gtk_widget_get_next_sibling(button)) gtk_widget_grab_focus(next);
-        return TRUE;
-    }
-    if (key == GDK_KEY_Up) {
-        if (auto *previous = gtk_widget_get_prev_sibling(button)) gtk_widget_grab_focus(previous);
-        else if (auto *state = static_cast<WindowState *>(g_object_get_data(G_OBJECT(button), "window-state")))
-            gtk_widget_grab_focus(state->address);
-        return TRUE;
-    }
-    return FALSE;
-}
-
 gboolean address_key_pressed(GtkEventControllerKey *, guint key, guint, GdkModifierType modifiers,
                              WindowState *state) {
     if (key == GDK_KEY_Return || key == GDK_KEY_KP_Enter) {
+        if (gtk_widget_get_visible(state->address_popover)) {
+            if (auto *row = suggestion_at(state, state->active_suggestion)) {
+                history_suggestion_clicked(GTK_BUTTON(row), state);
+                return TRUE;
+            }
+        }
         state->address_submission_dismissed = true;
         hide_address_suggestions(state);
         return FALSE;
@@ -1961,28 +1966,29 @@ gboolean address_key_pressed(GtkEventControllerKey *, guint key, guint, GdkModif
         gtk_widget_grab_focus(reverse ? state->site_button : state->bookmark_button);
         return TRUE;
     }
-    if (key != GDK_KEY_Down) return FALSE;
+    if (key != GDK_KEY_Down && key != GDK_KEY_Up) return FALSE;
     if (!gtk_widget_get_visible(state->address_popover)) {
         state->force_address_suggestions = true;
         address_changed(GTK_EDITABLE(state->address), state);
         state->force_address_suggestions = false;
     }
     if (!gtk_widget_get_visible(state->address_popover)) return FALSE;
-    if (auto *first = gtk_widget_get_first_child(state->address_suggestions)) {
-        gtk_widget_grab_focus(first);
+    int count = 0;
+    for (auto *row = gtk_widget_get_first_child(state->address_suggestions); row;
+         row = gtk_widget_get_next_sibling(row)) ++count;
+    if (count > 0) {
+        if (key == GDK_KEY_Down)
+            state->active_suggestion = std::min(state->active_suggestion + 1, count - 1);
+        else
+            state->active_suggestion = std::max(state->active_suggestion - 1, -1);
+        for (auto *row = gtk_widget_get_first_child(state->address_suggestions); row;
+             row = gtk_widget_get_next_sibling(row))
+            gtk_widget_remove_css_class(row, "active");
+        if (auto *row = suggestion_at(state, state->active_suggestion))
+            gtk_widget_add_css_class(row, "active");
         return TRUE;
     }
     return FALSE;
-}
-
-void address_key_released(GtkEventControllerKey *, guint key, guint, GdkModifierType,
-                          WindowState *state) {
-    if (key == GDK_KEY_Return || key == GDK_KEY_KP_Enter) {
-        hide_address_suggestions(state);
-        return;
-    }
-    const char *text = gtk_editable_get_text(GTK_EDITABLE(state->address));
-    if (text && *text) address_changed(GTK_EDITABLE(state->address), state);
 }
 
 gboolean toolbar_focus_key(GtkEventControllerKey *controller, guint key, guint,
@@ -2029,6 +2035,7 @@ void address_changed(GtkEditable *editable, WindowState *state) {
     }
     const std::string query = gtk_editable_get_text(editable);
     clear_box(state->address_suggestions);
+    state->active_suggestion = -1;
     if (query.empty() && !state->force_address_suggestions) {
         hide_address_suggestions(state);
         return;
@@ -2058,6 +2065,7 @@ void address_changed(GtkEditable *editable, WindowState *state) {
         std::ranges::transform(searchable, searchable.begin(), [](unsigned char value) { return std::tolower(value); });
         if (searchable.find(needle) == std::string::npos) continue;
         auto *button = gtk_button_new();
+        gtk_widget_set_focusable(button, FALSE);
         gtk_widget_add_css_class(button, "address-suggestion");
         auto *labels = gtk_box_new(GTK_ORIENTATION_VERTICAL, 1);
         auto *title = gtk_label_new((entry.title.empty() ? entry.uri : entry.title).c_str());
@@ -2073,10 +2081,6 @@ void address_changed(GtkEditable *editable, WindowState *state) {
         g_object_set_data_full(G_OBJECT(button), "suggestion-uri", g_strdup(entry.uri.c_str()), g_free);
         g_object_set_data(G_OBJECT(button), "window-state", state);
         g_signal_connect(button, "clicked", G_CALLBACK(history_suggestion_clicked), state);
-        g_signal_connect(button, "notify::has-focus", G_CALLBACK(suggestion_row_focus_changed), button);
-        auto *keys = gtk_event_controller_key_new();
-        g_signal_connect(keys, "key-pressed", G_CALLBACK(suggestion_key_pressed), button);
-        gtk_widget_add_controller(button, keys);
         auto *motion = gtk_event_controller_motion_new();
         g_signal_connect(motion, "motion", G_CALLBACK(suggestion_row_entered), button);
         gtk_widget_add_controller(button, motion);
@@ -2387,7 +2391,8 @@ TabState *new_tab(WindowState *state, const std::string &uri, bool load_initial)
     tab->window = state;
     tab->view = state->private_session
         ? WEBKIT_WEB_VIEW(g_object_new(WEBKIT_TYPE_WEB_VIEW, "network-session", state->private_session, nullptr))
-        : WEBKIT_WEB_VIEW(webkit_web_view_new());
+        : WEBKIT_WEB_VIEW(g_object_new(WEBKIT_TYPE_WEB_VIEW, "network-session",
+              state->owner->network_session, nullptr));
     auto *find_style = webkit_user_style_sheet_new(
         ".vantage-find-match{display:contents!important;background:transparent!important;color:#ffd37a!important;"
         "border:0!important;border-radius:0!important;padding:0!important;margin:0!important;box-shadow:none!important}"
@@ -2453,6 +2458,7 @@ TabState *new_tab(WindowState *state, const std::string &uri, bool load_initial)
     if (!state->app_mode) {
         auto *drag = gtk_drag_source_new();
         gtk_drag_source_set_actions(drag, GDK_ACTION_MOVE);
+        gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(drag), GTK_PHASE_CAPTURE);
         g_signal_connect(drag, "prepare", G_CALLBACK(tab_drag_prepare), tab);
         g_signal_connect(drag, "drag-begin", G_CALLBACK(tab_drag_begin), tab);
         g_signal_connect(drag, "drag-cancel", G_CALLBACK(tab_drag_cancel), tab);
@@ -2946,14 +2952,13 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     g_signal_connect(state->address, "activate", G_CALLBACK(submit_address), state);
     g_signal_connect(state->address, "changed", G_CALLBACK(address_changed), state);
     auto *dismiss_click = gtk_gesture_click_new();
-    gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(dismiss_click), GTK_PHASE_CAPTURE);
+    gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(dismiss_click), GTK_PHASE_BUBBLE);
     g_signal_connect(dismiss_click, "pressed", G_CALLBACK(dismiss_suggestions_on_click), state);
     gtk_widget_add_controller(state->window, GTK_EVENT_CONTROLLER(dismiss_click));
     g_signal_connect(state->window, "notify::is-active", G_CALLBACK(window_active_changed), state);
     auto *address_keys = gtk_event_controller_key_new();
     gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(address_keys), GTK_PHASE_CAPTURE);
     g_signal_connect(address_keys, "key-pressed", G_CALLBACK(address_key_pressed), state);
-    g_signal_connect(address_keys, "key-released", G_CALLBACK(address_key_released), state);
     gtk_widget_add_controller(state->address, address_keys);
     auto *reload_keys = gtk_event_controller_key_new();
     gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(reload_keys), GTK_PHASE_CAPTURE);
@@ -3031,6 +3036,18 @@ int run_native(const NativeLaunchOptions &options) {
     state.fullscreen = options.fullscreen;
     state.app_mode = options.app_mode;
     state.private_mode = options.private_mode;
+    if (options.smoke) {
+        state.network_session = webkit_network_session_new_ephemeral();
+    } else {
+        const auto web_data = std::filesystem::path(g_get_user_data_dir()) /
+            "vantage-browser" / "webkit";
+        const auto web_cache = std::filesystem::path(g_get_user_cache_dir()) /
+            "vantage-browser" / "webkit";
+        std::filesystem::create_directories(web_data);
+        std::filesystem::create_directories(web_cache);
+        state.network_session = webkit_network_session_new(
+            web_data.c_str(), web_cache.c_str());
+    }
     state.data = std::make_unique<UserDataStore>(
         std::filesystem::path(g_get_user_data_dir()) / "vantage-browser" / "browser.sqlite3", options.smoke);
     state.data->reconcile_downloads();
