@@ -1,18 +1,22 @@
 #include "application.h"
+#include "launch_options.h"
 #include "native_app.h"
 #include "preferences.h"
 #include "version.h"
 
 #include <exception>
 #include <iostream>
-#include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace {
 void usage(std::ostream &out) {
     out << "usage: vant [URL]\n"
-        << "       vant [--compatibility-video-rendering|--accelerated-video-rendering] [URL]\n"
+        << "       vant [--fullscreen] [--compatibility-video-rendering|--accelerated-video-rendering] [URL]\n"
+        << "       vant --private [URL]\n"
+        << "       vant --app URL [--fullscreen]\n"
+        << "       vant --app=URL [--fullscreen]\n"
         << "       vant settings video-rendering [compatibility|accelerated]\n"
         << "       vant [--headless-smoke|--native-probe|--native-smoke|--version|--help]\n";
 }
@@ -51,33 +55,24 @@ int main(int argc, char **argv) {
         return vantage::Application::live_instances() == 1 ? 0 : 1;
     }
     if (argc == 2 && std::string_view(argv[1]) == "--native-smoke")
-        return vantage::run_native(true, {});
+        return vantage::run_native({.smoke = true});
     if (argc == 2 && std::string_view(argv[1]) == "--native-probe") {
         std::cout << vantage::native_versions() << '\n';
         return 0;
     }
-    std::optional<bool> rendering_override;
-    std::string initial_uri = "vantage:new";
-    bool have_uri = false;
-    for (int index = 1; index < argc; ++index) {
-        const std::string_view argument = argv[index];
-        if (argument == "--compatibility-video-rendering" || argument == "--fix-broken-video")
-            rendering_override = true;
-        else if (argument == "--accelerated-video-rendering") rendering_override = false;
-        else if (!argument.starts_with('-') && !have_uri) {
-            initial_uri = argument;
-            have_uri = true;
-        } else {
-            usage(std::cerr);
-            return 2;
-        }
+    std::vector<std::string_view> arguments;
+    for (int index = 1; index < argc; ++index) arguments.emplace_back(argv[index]);
+    const auto launch = vantage::parse_launch_options(arguments);
+    if (!launch.valid) {
+        usage(std::cerr);
+        return 2;
     }
     try {
         vantage::apply_video_rendering_environment(
-            rendering_override.value_or(vantage::compatibility_video_rendering()));
+            launch.rendering_override.value_or(vantage::compatibility_video_rendering()));
     } catch (const std::exception &error) {
         std::cerr << "vant: " << error.what() << '\n';
         return 1;
     }
-    return vantage::run_native(false, initial_uri);
+    return vantage::run_native(launch.options);
 }

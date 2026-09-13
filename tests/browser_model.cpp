@@ -13,6 +13,8 @@ int main() {
     assert(duplicate && model.find(*duplicate)->uri == "https://example.com");
     assert(model.move_tab(*duplicate, 0));
     assert(model.tabs().front().id == *duplicate);
+    assert(model.move_tab(*duplicate, model.tabs().size()));
+    assert(model.tabs().back().id == *duplicate);
     assert(model.close_tab(first));
     assert(model.reopen_closed());
     assert(!model.close_tab(999999));
@@ -24,6 +26,7 @@ int main() {
     assert(vantage::command_for_shortcut("Ctrl+J") == vantage::Command::downloads);
     assert(vantage::command_for_shortcut("Ctrl+H") == vantage::Command::history);
     assert(vantage::command_for_shortcut("Ctrl+D") == vantage::Command::bookmark);
+    assert(vantage::command_for_shortcut("F11") == vantage::Command::fullscreen);
     assert(!vantage::command_for_shortcut("Ctrl+Alt+Surprise"));
 
     vantage::BrowserModel lifecycle;

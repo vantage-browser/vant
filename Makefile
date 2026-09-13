@@ -8,7 +8,7 @@ NATIVE_LIBS = $(shell $(PKG_CONFIG) --libs gtk4 webkitgtk-6.0)
 SQLITE_CFLAGS = $(shell $(PKG_CONFIG) --cflags sqlite3)
 SQLITE_LIBS = $(shell $(PKG_CONFIG) --libs sqlite3)
 BUILD := build
-CORE_SOURCES := src/application.cpp src/navigation.cpp src/browser_model.cpp src/session_store.cpp src/user_data.cpp src/preferences.cpp
+CORE_SOURCES := src/application.cpp src/navigation.cpp src/browser_model.cpp src/session_store.cpp src/user_data.cpp src/preferences.cpp src/launch_options.cpp
 CORE_OBJECTS := $(CORE_SOURCES:src/%.cpp=$(BUILD)/%.o)
 JSPP_DIR := third_party/jspp
 JSPP_SOURCES := $(filter-out $(JSPP_DIR)/src/main.cpp,$(wildcard $(JSPP_DIR)/src/*.cpp))
@@ -71,6 +71,9 @@ $(BUILD)/test_user_data: tests/user_data.cpp $(CORE_OBJECTS)
 $(BUILD)/test_preferences: tests/preferences.cpp $(BUILD)/preferences.o
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $^ -o $@
 
+$(BUILD)/test_launch_options: tests/launch_options.cpp $(BUILD)/launch_options.o
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $^ -o $@
+
 $(BUILD)/test_jspp_adapter: tests/jspp_adapter.cpp $(BUILD)/jspp_adapter.o $(JSPP_OBJECTS)
 	$(CXX) $(CPPFLAGS) -I$(JSPP_DIR)/include $(CXXFLAGS) $^ -pthread -o $@
 
@@ -80,13 +83,15 @@ $(BUILD)/automation.o: src/automation.cpp src/automation.h | $(BUILD)
 $(BUILD)/test_automation: tests/automation.cpp $(BUILD)/automation.o $(CORE_OBJECTS) $(JSPP_OBJECTS)
 	$(CXX) $(CPPFLAGS) -I$(JSPP_DIR)/include $(CXXFLAGS) $^ $(SQLITE_LIBS) -pthread -o $@
 
-test-unit: $(BUILD)/test_application $(BUILD)/test_navigation $(BUILD)/test_browser_model $(BUILD)/test_session_store $(BUILD)/test_user_data $(BUILD)/test_preferences $(BUILD)/test_jspp_adapter $(BUILD)/test_automation
+test-unit: $(BUILD)/test_application $(BUILD)/test_navigation $(BUILD)/test_browser_model $(BUILD)/test_session_store $(BUILD)/test_user_data $(BUILD)/test_preferences $(BUILD)/test_launch_options $(BUILD)/test_jspp_adapter $(BUILD)/test_automation
 	./$(BUILD)/test_application
 	./$(BUILD)/test_navigation
 	./$(BUILD)/test_browser_model
 	./$(BUILD)/test_session_store
 	./$(BUILD)/test_user_data
 	./$(BUILD)/test_preferences
+	./$(BUILD)/test_launch_options
+	python3 tests/desktop_entry.py
 	./$(BUILD)/test_jspp_adapter
 	./$(BUILD)/test_automation
 
@@ -107,12 +112,14 @@ test-sanitize: deps
 	$(CXX) $(CPPFLAGS) -std=c++20 -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -Wall -Wextra -Wpedantic -Werror tests/session_store.cpp $(CORE_SOURCES) $(SQLITE_LIBS) -o $(BUILD)/san/test_session_store
 	$(CXX) $(CPPFLAGS) -std=c++20 -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -Wall -Wextra -Wpedantic -Werror tests/user_data.cpp $(CORE_SOURCES) $(SQLITE_LIBS) -o $(BUILD)/san/test_user_data
 	$(CXX) $(CPPFLAGS) -std=c++20 -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -Wall -Wextra -Wpedantic -Werror tests/preferences.cpp src/preferences.cpp -o $(BUILD)/san/test_preferences
+	$(CXX) $(CPPFLAGS) -std=c++20 -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -Wall -Wextra -Wpedantic -Werror tests/launch_options.cpp src/launch_options.cpp -o $(BUILD)/san/test_launch_options
 	ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 ./$(BUILD)/san/test_application
 	ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 ./$(BUILD)/san/test_navigation
 	ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 ./$(BUILD)/san/test_browser_model
 	ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 ./$(BUILD)/san/test_session_store
 	ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 ./$(BUILD)/san/test_user_data
 	ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 ./$(BUILD)/san/test_preferences
+	ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 ./$(BUILD)/san/test_launch_options
 	$(CXX) $(CPPFLAGS) -I$(JSPP_DIR)/include -I$(JSPP_DIR)/src -std=c++20 -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -Wall -Wextra -Wpedantic -Werror tests/jspp_adapter.cpp src/jspp_adapter.cpp $(JSPP_SOURCES) -pthread -o $(BUILD)/san/test_jspp_adapter
 	ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 ./$(BUILD)/san/test_jspp_adapter
 	$(CXX) $(CPPFLAGS) -I$(JSPP_DIR)/include -I$(JSPP_DIR)/src -std=c++20 -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -Wall -Wextra -Wpedantic -Werror tests/automation.cpp src/automation.cpp $(CORE_SOURCES) $(JSPP_SOURCES) $(SQLITE_LIBS) -pthread -o $(BUILD)/san/test_automation

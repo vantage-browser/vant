@@ -50,7 +50,7 @@ private:
 
 enum class Command { new_tab, new_window, new_private_window, close_tab, reopen_tab,
     focus_address, command_palette, reload, stop, find, history, downloads, bookmark,
-    delete_history, print };
+    delete_history, print, fullscreen };
 std::optional<Command> command_for_shortcut(std::string_view shortcut);
 
 } // namespace vantage

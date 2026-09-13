@@ -291,7 +291,7 @@ rehearsed. A failed gate stops the release; do not weaken or silently skip it.
   from a clean supported system whenever dependencies or commands change.
 - Inspect this file, the current checkpoint evidence and repository status before
   substantial work.
-- Keep each checkpoint reviewable and commit it independently when authorised.
+- Keep each checkpoint reviewable and commit it independently when complete.
 - Do not combine dependency upgrades, vendored JS++ updates and browser feature
   work in one commit.
 - Treat generated files, caches, profiles, downloads and benchmark output as

@@ -91,6 +91,7 @@ struct WindowState {
     vantage::NavigationPolicy policy;
     bool smoke{};
     bool private_mode{};
+    bool app_mode{};
     bool closed{};
     bool new_tab_hovered{};
     bool suggestions_hovered{};
@@ -112,6 +113,12 @@ struct ApplicationState {
     GtkApplication *application{};
     std::string initial_uri;
     bool smoke{};
+    bool fullscreen{};
+    bool app_mode{};
+    bool private_mode{};
+    TabState *dragging_tab{};
+    bool tab_drop_completed{};
+    bool tab_drag_cancelled{};
     std::unique_ptr<vantage::UserDataStore> data;
     std::vector<DownloadContext *> active_downloads;
     std::vector<std::unique_ptr<WindowState>> windows;
@@ -121,7 +128,7 @@ void sync_active_chrome(WindowState *state);
 TabState *find_tab(WindowState *state, WebKitWebView *view);
 TabState *new_tab(WindowState *state, const std::string &uri, bool load_initial = true);
 void create_window(ApplicationState *owner, const std::string &initial_uri, bool smoke,
-                   WindowState *source, bool private_mode = false);
+                   WindowState *source, bool private_mode = false, bool create_initial_tab = true);
 std::string format_bytes(std::uint64_t bytes);
 void cancel_download(ApplicationState *owner, std::int64_t id);
 void address_changed(GtkEditable *, WindowState *state);
@@ -1238,10 +1245,11 @@ gboolean decide_policy(WebKitWebView *view, WebKitPolicyDecision *decision,
     if (type == WEBKIT_POLICY_DECISION_TYPE_NEW_WINDOW_ACTION) {
         webkit_policy_decision_ignore(decision);
         const auto resolved_window = tab->window->policy.resolve(target);
-        if (resolved_window.kind == vantage::NavigationKind::web)
-            new_tab(tab->window, resolved_window.uri);
-        else
-            new_tab(tab->window, "vantage:new");
+        const auto uri = resolved_window.kind == vantage::NavigationKind::web
+            ? resolved_window.uri : "vantage:new";
+        if (tab->window->app_mode)
+            create_window(tab->window->owner, uri, false, tab->window);
+        else new_tab(tab->window, uri);
         return TRUE;
     }
     if (webkit_navigation_action_get_mouse_button(action) == GDK_BUTTON_MIDDLE &&
@@ -1249,7 +1257,9 @@ gboolean decide_policy(WebKitWebView *view, WebKitPolicyDecision *decision,
         const auto resolved_middle = tab->window->policy.resolve(uri ? uri : "");
         if (resolved_middle.kind == vantage::NavigationKind::web) {
             webkit_policy_decision_ignore(decision);
-            new_tab(tab->window, resolved_middle.uri);
+            if (tab->window->app_mode)
+                create_window(tab->window->owner, resolved_middle.uri, false, tab->window);
+            else new_tab(tab->window, resolved_middle.uri);
             return TRUE;
         }
     }
@@ -1571,6 +1581,115 @@ TabState *tab_at(WindowState *state, GtkWidget *header, double x, double y) {
         }
     }
     return nullptr;
+}
+
+std::size_t tab_drop_position(WindowState *state, GtkWidget *surface, double x) {
+    for (std::size_t index = 0; index < state->tabs.size(); ++index) {
+        graphene_rect_t bounds;
+        if (!gtk_widget_compute_bounds(state->tabs[index]->tab, surface, &bounds)) continue;
+        if (x < bounds.origin.x + bounds.size.width / 2.0) return index;
+    }
+    return state->tabs.size();
+}
+
+bool move_tab_to_window(TabState *tab, WindowState *target, std::size_t destination) {
+    if (!tab || !target || target->closed || target->app_mode) return false;
+    auto *source = tab->window;
+    if (!source || source->closed || source->private_mode != target->private_mode) return false;
+    const auto found = std::find_if(source->tabs.begin(), source->tabs.end(),
+        [tab](const auto &candidate) { return candidate.get() == tab; });
+    if (found == source->tabs.end()) return false;
+    const auto source_index = static_cast<std::size_t>(std::distance(source->tabs.begin(), found));
+
+    if (source == target) {
+        destination = std::min(destination, source->tabs.size());
+        if (destination > source_index) --destination;
+        if (destination == source_index) return true;
+        auto owned = std::move(*found);
+        source->tabs.erase(found);
+        source->tabs.insert(source->tabs.begin() + static_cast<std::ptrdiff_t>(destination), std::move(owned));
+        GtkWidget *previous = destination == 0 ? nullptr : source->tabs[destination - 1]->tab;
+        gtk_box_reorder_child_after(GTK_BOX(source->tab_box), tab->tab, previous);
+        update_tab_widths(source);
+        return true;
+    }
+
+    const bool was_active = source->view == tab->view;
+    g_object_ref(tab->tab);
+    g_object_ref(tab->page);
+    gtk_box_remove(GTK_BOX(source->tab_box), tab->tab);
+    gtk_stack_remove(GTK_STACK(source->stack), tab->page);
+    auto owned = std::move(*found);
+    source->tabs.erase(found);
+
+    auto *find_controller = webkit_web_view_get_find_controller(tab->view);
+    g_signal_handlers_disconnect_matched(find_controller,
+        static_cast<GSignalMatchType>(G_SIGNAL_MATCH_FUNC | G_SIGNAL_MATCH_DATA),
+        0, 0, nullptr, G_CALLBACK(find_counted), source);
+    g_signal_connect(find_controller, "counted-matches", G_CALLBACK(find_counted), target);
+
+    tab->window = target;
+    destination = std::min(destination, target->tabs.size());
+    GtkWidget *previous = destination == 0 ? nullptr : target->tabs[destination - 1]->tab;
+    gtk_box_insert_child_after(GTK_BOX(target->tab_box), tab->tab, previous);
+    gtk_stack_add_child(GTK_STACK(target->stack), tab->page);
+    target->tabs.insert(target->tabs.begin() + static_cast<std::ptrdiff_t>(destination), std::move(owned));
+    g_object_unref(tab->page);
+    g_object_unref(tab->tab);
+    select_tab(tab);
+    update_tab_widths(target);
+
+    if (source->tabs.empty()) {
+        source->view = nullptr;
+        gtk_window_close(GTK_WINDOW(source->window));
+    } else if (was_active) {
+        select_tab(source->tabs[std::min(source_index, source->tabs.size() - 1)].get());
+    }
+    update_tab_widths(source);
+    return true;
+}
+
+GdkContentProvider *tab_drag_prepare(GtkDragSource *, double, double, TabState *tab) {
+    if (!tab || tab->window->app_mode) return nullptr;
+    return gdk_content_provider_new_typed(G_TYPE_STRING, "vantage-tab");
+}
+
+void tab_drag_begin(GtkDragSource *source, GdkDrag *, TabState *tab) {
+    auto *owner = tab->window->owner;
+    owner->dragging_tab = tab;
+    owner->tab_drop_completed = false;
+    owner->tab_drag_cancelled = false;
+    auto *paintable = gtk_widget_paintable_new(tab->tab);
+    gtk_drag_source_set_icon(source, GDK_PAINTABLE(paintable), 0, 0);
+    g_object_unref(paintable);
+}
+
+gboolean tab_drag_cancel(GtkDragSource *, GdkDrag *, GdkDragCancelReason reason, TabState *tab) {
+    tab->window->owner->tab_drag_cancelled = reason != GDK_DRAG_CANCEL_NO_TARGET;
+    return reason == GDK_DRAG_CANCEL_NO_TARGET;
+}
+
+void tab_drag_end(GtkDragSource *, GdkDrag *, gboolean, TabState *tab) {
+    auto *owner = tab->window->owner;
+    if (owner->dragging_tab == tab && !owner->tab_drop_completed && !owner->tab_drag_cancelled) {
+        auto *source = tab->window;
+        create_window(owner, "vantage:new", false, source, source->private_mode, false);
+        auto *target = owner->windows.back().get();
+        move_tab_to_window(tab, target, 0);
+    }
+    owner->dragging_tab = nullptr;
+    owner->tab_drop_completed = false;
+    owner->tab_drag_cancelled = false;
+}
+
+gboolean tab_dropped(GtkDropTarget *, const GValue *, double x, double, WindowState *target) {
+    auto *owner = target->owner;
+    auto *tab = owner->dragging_tab;
+    if (!tab || tab->window->private_mode != target->private_mode) return FALSE;
+    const auto destination = tab_drop_position(target, target->tab_strip, x);
+    if (!move_tab_to_window(tab, target, destination)) return FALSE;
+    owner->tab_drop_completed = true;
+    return TRUE;
 }
 
 void header_middle_pressed(GtkGestureClick *gesture, int, double x, double y, WindowState *state) {
@@ -2258,6 +2377,11 @@ void enforce_address_direction(GObject *, GParamSpec *, GtkWidget *address) {
 }
 
 TabState *new_tab(WindowState *state, const std::string &uri, bool load_initial) {
+    if (state->app_mode && !state->tabs.empty()) {
+        create_window(state->owner, uri, false, state, state->private_mode);
+        auto *window = state->owner->windows.back().get();
+        return window->tabs.empty() ? nullptr : window->tabs.front().get();
+    }
     auto owned = std::make_unique<TabState>();
     auto *tab = owned.get();
     tab->window = state;
@@ -2326,6 +2450,15 @@ TabState *new_tab(WindowState *state, const std::string &uri, bool load_initial)
     g_signal_connect(tab_motion, "enter", G_CALLBACK(tab_pointer_entered), tab);
     g_signal_connect(tab_motion, "leave", G_CALLBACK(tab_pointer_left), tab);
     gtk_widget_add_controller(tab->tab, tab_motion);
+    if (!state->app_mode) {
+        auto *drag = gtk_drag_source_new();
+        gtk_drag_source_set_actions(drag, GDK_ACTION_MOVE);
+        g_signal_connect(drag, "prepare", G_CALLBACK(tab_drag_prepare), tab);
+        g_signal_connect(drag, "drag-begin", G_CALLBACK(tab_drag_begin), tab);
+        g_signal_connect(drag, "drag-cancel", G_CALLBACK(tab_drag_cancel), tab);
+        g_signal_connect(drag, "drag-end", G_CALLBACK(tab_drag_end), tab);
+        gtk_widget_add_controller(tab->tab, GTK_EVENT_CONTROLLER(drag));
+    }
 
     g_signal_connect(select, "clicked", G_CALLBACK(tab_selected), tab);
     g_signal_connect(close, "clicked", G_CALLBACK(tab_closed), tab);
@@ -2366,6 +2499,39 @@ gboolean key_pressed(GtkEventControllerKey *, guint keyval, guint,
     const bool control = (modifiers & GDK_CONTROL_MASK) != 0;
     const bool shift = (modifiers & GDK_SHIFT_MASK) != 0;
     const bool alternate = (modifiers & GDK_ALT_MASK) != 0;
+    if (keyval == GDK_KEY_F11) {
+        if (gtk_window_is_fullscreen(GTK_WINDOW(state->window)))
+            gtk_window_unfullscreen(GTK_WINDOW(state->window));
+        else gtk_window_fullscreen(GTK_WINDOW(state->window));
+        return TRUE;
+    }
+    if (state->app_mode && (control || alternate)) {
+        if (control && (keyval == GDK_KEY_w || keyval == GDK_KEY_W)) {
+            gtk_window_close(GTK_WINDOW(state->window));
+            return TRUE;
+        }
+        if (control && (keyval == GDK_KEY_r || keyval == GDK_KEY_R)) {
+            reload_or_stop(nullptr, state);
+            return TRUE;
+        }
+        if (control && (keyval == GDK_KEY_f || keyval == GDK_KEY_F)) {
+            show_find(state);
+            return TRUE;
+        }
+        if (control && (keyval == GDK_KEY_p || keyval == GDK_KEY_P)) {
+            print_page(nullptr, state);
+            return TRUE;
+        }
+        if (alternate && keyval == GDK_KEY_Left) {
+            go_back(nullptr, state);
+            return TRUE;
+        }
+        if (alternate && keyval == GDK_KEY_Right) {
+            go_forward(nullptr, state);
+            return TRUE;
+        }
+        return FALSE;
+    }
     if (control && keyval >= GDK_KEY_1 && keyval <= GDK_KEY_9) {
         const auto index = static_cast<std::size_t>(keyval - GDK_KEY_1);
         if (index < state->tabs.size()) select_tab(state->tabs[index].get());
@@ -2522,13 +2688,14 @@ void install_style(GtkWidget *window) {
 }
 
 void create_window(ApplicationState *owner, const std::string &initial_uri, bool smoke,
-                   WindowState *source, bool private_mode) {
+                   WindowState *source, bool private_mode, bool create_initial_tab) {
     auto owned_state = std::make_unique<WindowState>();
     auto *state = owned_state.get();
     state->owner = owner;
     state->application = owner->application;
     state->smoke = smoke;
     state->private_mode = private_mode;
+    state->app_mode = owner->app_mode;
     if (private_mode) state->private_session = webkit_network_session_new_ephemeral();
     owner->windows.push_back(std::move(owned_state));
 
@@ -2594,7 +2761,16 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(tab_scroll), GTK_PHASE_CAPTURE);
     g_signal_connect(tab_scroll, "scroll", G_CALLBACK(tab_strip_scrolled), state);
     gtk_widget_add_controller(tab_strip, tab_scroll);
+    if (!state->app_mode) {
+        auto *tab_drop = gtk_drop_target_new(G_TYPE_STRING, GDK_ACTION_MOVE);
+        g_signal_connect(tab_drop, "drop", G_CALLBACK(tab_dropped), state);
+        gtk_widget_add_controller(tab_strip, GTK_EVENT_CONTROLLER(tab_drop));
+    }
     gtk_window_set_titlebar(GTK_WINDOW(state->window), header);
+    if (state->app_mode) {
+        gtk_widget_set_visible(state->tab_box, FALSE);
+        gtk_widget_set_visible(new_button, FALSE);
+    }
 
     auto *layout = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     auto *toolbar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
@@ -2754,6 +2930,7 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     gtk_overlay_set_child(GTK_OVERLAY(page_overlay), state->stack);
     gtk_overlay_add_overlay(GTK_OVERLAY(page_overlay), state->find_bar);
     gtk_box_append(GTK_BOX(layout), navigation);
+    if (state->app_mode) gtk_widget_set_visible(navigation, FALSE);
     gtk_box_append(GTK_BOX(layout), page_overlay);
     state->chrome_overlay = gtk_overlay_new();
     gtk_overlay_set_child(GTK_OVERLAY(state->chrome_overlay), layout);
@@ -2806,17 +2983,21 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     g_signal_connect(keys, "key-pressed", G_CALLBACK(key_pressed), state);
     gtk_widget_add_controller(state->window, keys);
 
-    auto *tab = new_tab(state, initial_uri);
-    auto *network_session = webkit_web_view_get_network_session(tab->view);
-    if (!g_object_get_data(G_OBJECT(network_session), "vantage-download-handler")) {
-        g_signal_connect(network_session, "download-started", G_CALLBACK(download_started), owner);
-        g_object_set_data(G_OBJECT(network_session), "vantage-download-handler", owner);
+    TabState *tab = nullptr;
+    if (create_initial_tab) {
+        tab = new_tab(state, initial_uri);
+        auto *network_session = webkit_web_view_get_network_session(tab->view);
+        if (!g_object_get_data(G_OBJECT(network_session), "vantage-download-handler")) {
+            g_signal_connect(network_session, "download-started", G_CALLBACK(download_started), owner);
+            g_object_set_data(G_OBJECT(network_session), "vantage-download-handler", owner);
+        }
     }
     gtk_window_present(GTK_WINDOW(state->window));
-    if (initial_uri.starts_with("vantage:") || initial_uri.starts_with("about:")) {
+    if (owner->fullscreen) gtk_window_fullscreen(GTK_WINDOW(state->window));
+    if (tab && !state->app_mode && (initial_uri.starts_with("vantage:") || initial_uri.starts_with("about:"))) {
         gtk_widget_grab_focus(state->address);
     }
-    if (state->smoke) {
+    if (state->smoke && tab) {
         webkit_web_view_load_html(tab->view, "<!doctype html><title>Vant smoke</title><p>ok</p>", "https://smoke.invalid/");
         g_timeout_add(900, finish_smoke, state);
     }
@@ -2825,7 +3006,7 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
 void activate(GtkApplication *application, void *user_data) {
     auto *owner = static_cast<ApplicationState *>(user_data);
     owner->application = application;
-    create_window(owner, owner->initial_uri, owner->smoke, nullptr, false);
+    create_window(owner, owner->initial_uri, owner->smoke, nullptr, owner->private_mode);
     owner->smoke = false;
 }
 
@@ -2840,15 +3021,18 @@ std::string native_versions() {
         std::to_string(webkit_get_minor_version()) + "." + std::to_string(webkit_get_micro_version());
 }
 
-int run_native(bool smoke, const std::string &initial_uri) {
+int run_native(const NativeLaunchOptions &options) {
     auto application = std::unique_ptr<GtkApplication, decltype(&g_object_unref)>(
         gtk_application_new("cv.vantage_browser.Vantage", G_APPLICATION_DEFAULT_FLAGS), &g_object_unref);
     ApplicationState state;
     state.application = application.get();
-    state.initial_uri = initial_uri;
-    state.smoke = smoke;
+    state.initial_uri = options.initial_uri;
+    state.smoke = options.smoke;
+    state.fullscreen = options.fullscreen;
+    state.app_mode = options.app_mode;
+    state.private_mode = options.private_mode;
     state.data = std::make_unique<UserDataStore>(
-        std::filesystem::path(g_get_user_data_dir()) / "vantage-browser" / "browser.sqlite3", smoke);
+        std::filesystem::path(g_get_user_data_dir()) / "vantage-browser" / "browser.sqlite3", options.smoke);
     state.data->reconcile_downloads();
     g_signal_connect(application.get(), "activate", G_CALLBACK(activate), &state);
     return g_application_run(G_APPLICATION(application.get()), 0, nullptr);

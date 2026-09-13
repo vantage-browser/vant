@@ -72,6 +72,23 @@ Or open a URL directly:
 ./build/vant https://nift.dev
 ```
 
+Open normally in fullscreen, or open one site as a standalone application with
+no tabs, address bar, downloads button or settings menu:
+
+```sh
+./build/vant --fullscreen https://nift.dev
+./build/vant --private
+./build/vant --app https://nift.dev
+./build/vant --app=https://nift.dev --fullscreen
+```
+
+Press `F11` to enter or leave fullscreen. Application windows retain ordinary
+page actions such as reload, find and print through their keyboard shortcuts,
+while navigation remains inside the launched site window.
+
+The installed desktop launcher also exposes **New Window** and **New Private
+Window** when right-clicked in a compatible application menu or dock.
+
 On Wayland, GTK normally selects the correct backend automatically. To require
 Wayland while diagnosing desktop integration:
 

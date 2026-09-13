@@ -86,9 +86,11 @@ std::optional<TabId> BrowserModel::duplicate_tab(TabId id) {
 
 bool BrowserModel::move_tab(TabId id, std::size_t destination) {
     auto it = std::find_if(tabs_.begin(), tabs_.end(), [id](const Tab &tab) { return tab.id == id; });
-    if (it == tabs_.end() || destination >= tabs_.size()) return false;
+    if (it == tabs_.end() || destination > tabs_.size()) return false;
+    const auto source = static_cast<std::size_t>(std::distance(tabs_.begin(), it));
     auto tab = std::move(*it);
     tabs_.erase(it);
+    if (destination > source) --destination;
     tabs_.insert(tabs_.begin() + static_cast<std::ptrdiff_t>(destination), std::move(tab));
     return true;
 }
@@ -109,6 +111,7 @@ std::optional<Command> command_for_shortcut(std::string_view shortcut) {
     if (shortcut == "Ctrl+D") return Command::bookmark;
     if (shortcut == "Ctrl+Shift+Delete") return Command::delete_history;
     if (shortcut == "Ctrl+P") return Command::print;
+    if (shortcut == "F11") return Command::fullscreen;
     return std::nullopt;
 }
 

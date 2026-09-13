@@ -1,10 +1,10 @@
 #ifndef VANTAGE_NATIVE_APP_H
 #define VANTAGE_NATIVE_APP_H
 
-#include <string>
+#include "launch_options.h"
 
 namespace vantage {
-int run_native(bool smoke, const std::string &initial_uri);
+int run_native(const NativeLaunchOptions &options);
 std::string native_versions();
 }
 

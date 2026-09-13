@@ -12,3 +12,12 @@ StartupWMClass=cv.vantage_browser.Vantage
 Categories=Network;WebBrowser;
 MimeType=x-scheme-handler/http;x-scheme-handler/https;text/html;
 Keywords=web;browser;internet;
+Actions=NewWindow;NewPrivateWindow;
+
+[Desktop Action NewWindow]
+Name=New Window
+Exec=vant
+
+[Desktop Action NewPrivateWindow]
+Name=New Private Window
+Exec=vant --private
