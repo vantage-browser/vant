@@ -1625,7 +1625,7 @@ bool move_tab_to_window(TabState *tab, WindowState *target, std::size_t destinat
     auto *find_controller = webkit_web_view_get_find_controller(tab->view);
     g_signal_handlers_disconnect_matched(find_controller,
         static_cast<GSignalMatchType>(G_SIGNAL_MATCH_FUNC | G_SIGNAL_MATCH_DATA),
-        0, 0, nullptr, G_CALLBACK(find_counted), source);
+        0, 0, nullptr, reinterpret_cast<gpointer>(G_CALLBACK(find_counted)), source);
     g_signal_connect(find_controller, "counted-matches", G_CALLBACK(find_counted), target);
 
     tab->window = target;
