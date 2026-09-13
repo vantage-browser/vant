@@ -4,7 +4,7 @@
 #include <string_view>
 
 namespace vantage {
-inline constexpr std::string_view version = "0.1.1";
+inline constexpr std::string_view version = "0.1.2";
 }
 
 #endif

@@ -6,9 +6,10 @@ Ubuntu/Omarchy on Wayland. The product goal is a genuinely useful daily browser
 with a smaller operational footprint and a calmer interface than a general
 purpose Chromium distribution.
 
-Version 0.1.1 is the current public preview. Only behavior backed by implemented
-code and retained evidence is shipped; broader support, security, compatibility
-and performance claims remain prohibited until their checkpoints are accepted.
+Version 0.1.2 is the current development version following the 0.1.1 public
+preview. Only behavior backed by implemented code and retained evidence is
+shipped; broader support, security, compatibility and performance claims remain
+prohibited until their checkpoints are accepted.
 
 ## Product identity
 
