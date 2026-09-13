@@ -80,6 +80,7 @@ struct WindowState {
     GtkWidget *downloads_spinner{};
     GtkWidget *tab_box{};
     GtkWidget *tab_strip{};
+    GtkWidget *tab_drop_placeholder{};
     GtkWidget *new_tab_button{};
     GtkWidget *stack{};
     GtkWidget *new_tab_backdrop{};
@@ -107,7 +108,12 @@ struct WindowState {
     unsigned find_total{};
     unsigned find_generation{};
     bool custom_find{};
-    ~WindowState() { if (private_session) g_object_unref(private_session); }
+    guint tab_drop_animation{};
+    int tab_drop_width{};
+    ~WindowState() {
+        if (tab_drop_animation) g_source_remove(tab_drop_animation);
+        if (private_session) g_object_unref(private_session);
+    }
 };
 
 struct ApplicationState {
@@ -1402,7 +1408,7 @@ void update_tab_widths(WindowState *state) {
     const int measured_new_tab_width = state->new_tab_button ? gtk_widget_get_width(state->new_tab_button) : 0;
     const int new_tab_width = measured_new_tab_width > 0 ? measured_new_tab_width : 32;
     if (strip_width <= new_tab_width) return;
-    const int available = std::max(1, strip_width - new_tab_width - 4);
+    const int available = std::max(1, strip_width - new_tab_width - state->tab_drop_width - 4);
     const int width = std::min(184, std::max(1, available / static_cast<int>(state->tabs.size())));
     for (const auto &tab : state->tabs) gtk_widget_set_size_request(tab->tab, width, 38);
 }
@@ -1675,8 +1681,54 @@ gboolean tab_drag_cancel(GtkDragSource *, GdkDrag *, GdkDragCancelReason reason,
     return reason == GDK_DRAG_CANCEL_NO_TARGET;
 }
 
+gboolean expand_tab_drop_placeholder(void *data) {
+    auto *state = static_cast<WindowState *>(data);
+    state->tab_drop_width = std::min(state->tab_drop_width + 6, 30);
+    gtk_widget_set_size_request(state->tab_drop_placeholder, state->tab_drop_width, -1);
+    update_tab_widths(state);
+    if (state->tab_drop_width < 30) return G_SOURCE_CONTINUE;
+    state->tab_drop_animation = 0;
+    return G_SOURCE_REMOVE;
+}
+
+void clear_tab_drop_placeholder(WindowState *state) {
+    if (!state->tab_drop_placeholder) return;
+    if (state->tab_drop_animation) {
+        g_source_remove(state->tab_drop_animation);
+        state->tab_drop_animation = 0;
+    }
+    state->tab_drop_width = 0;
+    gtk_widget_set_size_request(state->tab_drop_placeholder, 0, -1);
+    gtk_widget_set_visible(state->tab_drop_placeholder, FALSE);
+    update_tab_widths(state);
+}
+
+void show_tab_drop_placeholder(WindowState *state, std::size_t destination) {
+    destination = std::min(destination, state->tabs.size());
+    GtkWidget *previous = destination == 0 ? nullptr : state->tabs[destination - 1]->tab;
+    gtk_box_reorder_child_after(GTK_BOX(state->tab_box), state->tab_drop_placeholder, previous);
+    if (gtk_widget_get_visible(state->tab_drop_placeholder)) return;
+    state->tab_drop_width = 0;
+    gtk_widget_set_size_request(state->tab_drop_placeholder, 0, -1);
+    gtk_widget_set_visible(state->tab_drop_placeholder, TRUE);
+    state->tab_drop_animation = g_timeout_add(16, expand_tab_drop_placeholder, state);
+}
+
+GdkDragAction tab_drag_motion(GtkDropTarget *, double x, double, WindowState *target) {
+    auto *tab = target->owner->dragging_tab;
+    if (!tab || tab->window->private_mode != target->private_mode) return static_cast<GdkDragAction>(0);
+    show_tab_drop_placeholder(target, tab_drop_position(target, target->tab_strip, x));
+    return GDK_ACTION_MOVE;
+}
+
+void tab_drag_left(GtkDropTarget *, WindowState *target) {
+    clear_tab_drop_placeholder(target);
+}
+
 void tab_drag_end(GtkDragSource *, GdkDrag *, gboolean, TabState *tab) {
     auto *owner = tab->window->owner;
+    for (auto &window : owner->windows)
+        if (!window->closed) clear_tab_drop_placeholder(window.get());
     if (owner->dragging_tab == tab && !owner->tab_drop_completed && !owner->tab_drag_cancelled) {
         auto *source = tab->window;
         create_window(owner, "vantage:new", false, source, source->private_mode, false);
@@ -1693,6 +1745,7 @@ gboolean tab_dropped(GtkDropTarget *, const GValue *, double x, double, WindowSt
     auto *tab = owner->dragging_tab;
     if (!tab || tab->window->private_mode != target->private_mode) return FALSE;
     const auto destination = tab_drop_position(target, target->tab_strip, x);
+    clear_tab_drop_placeholder(target);
     if (!move_tab_to_window(tab, target, destination)) return FALSE;
     owner->tab_drop_completed = true;
     return TRUE;
@@ -1894,13 +1947,9 @@ void suggestion_panel_left(GtkEventControllerMotion *, WindowState *state) {
 void activate_suggestion_row(GtkWidget *button) {
     auto *parent = gtk_widget_get_parent(button);
     if (!parent) return;
-    auto *state = static_cast<WindowState *>(g_object_get_data(G_OBJECT(button), "window-state"));
-    int index = 0;
     for (auto *row = gtk_widget_get_first_child(parent); row;
-         row = gtk_widget_get_next_sibling(row), ++index) {
+         row = gtk_widget_get_next_sibling(row))
         gtk_widget_remove_css_class(row, "active");
-        if (row == button && state) state->active_suggestion = index;
-    }
     gtk_widget_add_css_class(button, "active");
 }
 
@@ -1927,6 +1976,7 @@ void suggestion_row_entered(GtkEventControllerMotion *controller, double, double
         std::abs(pointer_y - state->suggestion_pointer_y) < 0.5) return;
     state->suggestion_pointer_x = pointer_x;
     state->suggestion_pointer_y = pointer_y;
+    state->active_suggestion = -1;
     activate_suggestion_row(button);
 }
 
@@ -1940,10 +1990,11 @@ void window_active_changed(GObject *window, GParamSpec *, WindowState *state) {
 }
 
 void history_suggestion_clicked(GtkButton *button, WindowState *state) {
-    const auto *uri = static_cast<const char *>(g_object_get_data(G_OBJECT(button), "suggestion-uri"));
-    if (!uri) return;
+    const auto *stored_uri = static_cast<const char *>(g_object_get_data(G_OBJECT(button), "suggestion-uri"));
+    if (!stored_uri) return;
+    const std::string uri = stored_uri;
     hide_address_suggestions(state);
-    gtk_editable_set_text(GTK_EDITABLE(state->address), uri);
+    gtk_editable_set_text(GTK_EDITABLE(state->address), uri.c_str());
     submit_address(nullptr, state);
 }
 
@@ -2192,6 +2243,7 @@ void refresh_download_chrome(ApplicationState *owner) {
 }
 
 gboolean window_closing(GtkWindow *, WindowState *state) {
+    clear_tab_drop_placeholder(state);
     state->closed = true;
     return FALSE;
 }
@@ -2632,6 +2684,9 @@ void install_style(GtkWidget *window) {
         ".browser-tab:hover .tab-close, .browser-tab-body.active .tab-close { opacity: 1; }"
         ".browser-tab button:hover { background: transparent; }"
         ".browser-tab .tab-close:hover { background: transparent; color: #ff7657; }"
+        ".tab-strip:drop(active) { border-color: transparent; outline: none; background: transparent; box-shadow: none; }"
+        ".tab-drop-placeholder { min-width: 0; padding: 5px 0; }"
+        ".tab-drop-marker { min-width: 2px; min-height: 26px; background: #ff7657; }"
         ".new-tab { min-width: 28px; min-height: 28px; margin-left: 3px; }"
         ".navigation { background: #2c2c2c; border-bottom: 1px solid #393936; }"
         ".toolbar { padding: 6px 8px; background: #2c2c2c; }"
@@ -2722,6 +2777,15 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     state->tab_strip = tab_strip;
     gtk_widget_add_css_class(tab_strip, "tab-strip");
     state->tab_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    state->tab_drop_placeholder = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_add_css_class(state->tab_drop_placeholder, "tab-drop-placeholder");
+    gtk_widget_set_halign(state->tab_drop_placeholder, GTK_ALIGN_CENTER);
+    auto *tab_drop_marker = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_add_css_class(tab_drop_marker, "tab-drop-marker");
+    gtk_box_append(GTK_BOX(state->tab_drop_placeholder), tab_drop_marker);
+    gtk_widget_set_size_request(state->tab_drop_placeholder, 0, -1);
+    gtk_widget_set_visible(state->tab_drop_placeholder, FALSE);
+    gtk_box_append(GTK_BOX(state->tab_box), state->tab_drop_placeholder);
     auto *new_button = gtk_button_new();
     state->new_tab_button = new_button;
     gtk_widget_add_css_class(new_button, "flat");
@@ -2769,6 +2833,8 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     gtk_widget_add_controller(tab_strip, tab_scroll);
     if (!state->app_mode) {
         auto *tab_drop = gtk_drop_target_new(G_TYPE_STRING, GDK_ACTION_MOVE);
+        g_signal_connect(tab_drop, "motion", G_CALLBACK(tab_drag_motion), state);
+        g_signal_connect(tab_drop, "leave", G_CALLBACK(tab_drag_left), state);
         g_signal_connect(tab_drop, "drop", G_CALLBACK(tab_dropped), state);
         gtk_widget_add_controller(tab_strip, GTK_EVENT_CONTROLLER(tab_drop));
     }
