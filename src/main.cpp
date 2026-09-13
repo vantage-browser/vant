@@ -64,6 +64,7 @@ int main(int argc, char **argv) {
     for (int index = 1; index < argc; ++index) arguments.emplace_back(argv[index]);
     const auto launch = vantage::parse_launch_options(arguments);
     if (!launch.valid) {
+        if (!launch.error.empty()) std::cerr << "vant: " << launch.error << '\n';
         usage(std::cerr);
         return 2;
     }

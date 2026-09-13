@@ -74,6 +74,9 @@ $(BUILD)/test_preferences: tests/preferences.cpp $(BUILD)/preferences.o
 $(BUILD)/test_launch_options: tests/launch_options.cpp $(BUILD)/launch_options.o
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $^ -o $@
 
+$(BUILD)/test_version: tests/version.cpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
+
 $(BUILD)/test_jspp_adapter: tests/jspp_adapter.cpp $(BUILD)/jspp_adapter.o $(JSPP_OBJECTS)
 	$(CXX) $(CPPFLAGS) -I$(JSPP_DIR)/include $(CXXFLAGS) $^ -pthread -o $@
 
@@ -83,7 +86,7 @@ $(BUILD)/automation.o: src/automation.cpp src/automation.h | $(BUILD)
 $(BUILD)/test_automation: tests/automation.cpp $(BUILD)/automation.o $(CORE_OBJECTS) $(JSPP_OBJECTS)
 	$(CXX) $(CPPFLAGS) -I$(JSPP_DIR)/include $(CXXFLAGS) $^ $(SQLITE_LIBS) -pthread -o $@
 
-test-unit: $(BUILD)/test_application $(BUILD)/test_navigation $(BUILD)/test_browser_model $(BUILD)/test_session_store $(BUILD)/test_user_data $(BUILD)/test_preferences $(BUILD)/test_launch_options $(BUILD)/test_jspp_adapter $(BUILD)/test_automation
+test-unit: $(BUILD)/test_application $(BUILD)/test_navigation $(BUILD)/test_browser_model $(BUILD)/test_session_store $(BUILD)/test_user_data $(BUILD)/test_preferences $(BUILD)/test_launch_options $(BUILD)/test_version $(BUILD)/test_jspp_adapter $(BUILD)/test_automation
 	./$(BUILD)/test_application
 	./$(BUILD)/test_navigation
 	./$(BUILD)/test_browser_model
@@ -91,6 +94,7 @@ test-unit: $(BUILD)/test_application $(BUILD)/test_navigation $(BUILD)/test_brow
 	./$(BUILD)/test_user_data
 	./$(BUILD)/test_preferences
 	./$(BUILD)/test_launch_options
+	./$(BUILD)/test_version
 	python3 tests/desktop_entry.py
 	./$(BUILD)/test_jspp_adapter
 	./$(BUILD)/test_automation

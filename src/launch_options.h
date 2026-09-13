@@ -20,6 +20,7 @@ struct LaunchOptionsParse {
     NativeLaunchOptions options;
     std::optional<bool> rendering_override;
     bool valid{true};
+    std::string error;
 };
 
 LaunchOptionsParse parse_launch_options(const std::vector<std::string_view> &arguments);
