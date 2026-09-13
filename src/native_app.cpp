@@ -1723,7 +1723,11 @@ void queue_tab_detach(TabState *tab) {
 gboolean tab_drag_cancel(GtkDragSource *, GdkDrag *, GdkDragCancelReason reason, TabState *tab) {
     auto *owner = tab->window->owner;
     owner->tab_drag_cancelled = true;
-    if (reason == GDK_DRAG_CANCEL_NO_TARGET) {
+    // Wayland may report a process-local tab payload as ERROR when it is
+    // released over another client (such as the desktop), rather than the more
+    // specific NO_TARGET. Both mean the tab was intentionally dropped outside
+    // Vantage. Only Escape/user cancellation should leave it in place.
+    if (reason != GDK_DRAG_CANCEL_USER_CANCELLED) {
         queue_tab_detach(tab);
         return TRUE;
     }
