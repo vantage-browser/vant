@@ -125,12 +125,15 @@ struct ApplicationState {
     bool private_mode{};
     WebKitNetworkSession *network_session{};
     TabState *dragging_tab{};
+    TabState *pending_tab_detach{};
+    guint tab_detach_source{};
     bool tab_drop_completed{};
     bool tab_drag_cancelled{};
     std::unique_ptr<vantage::UserDataStore> data;
     std::vector<DownloadContext *> active_downloads;
     std::vector<std::unique_ptr<WindowState>> windows;
     ~ApplicationState() {
+        if (tab_detach_source) g_source_remove(tab_detach_source);
         windows.clear();
         if (network_session) g_object_unref(network_session);
     }
@@ -1676,9 +1679,53 @@ void tab_drag_begin(GtkDragSource *source, GdkDrag *, TabState *tab) {
     g_object_unref(paintable);
 }
 
+struct DeferredTabDetach {
+    ApplicationState *owner{};
+    TabState *tab{};
+};
+
+gboolean detach_tab_deferred(void *data) {
+    const auto *request = static_cast<DeferredTabDetach *>(data);
+    auto *owner = request->owner;
+    if (owner->pending_tab_detach != request->tab) return G_SOURCE_REMOVE;
+    owner->tab_detach_source = 0;
+    owner->pending_tab_detach = nullptr;
+    WindowState *source = nullptr;
+    for (const auto &window : owner->windows) {
+        if (window->closed || window->app_mode) continue;
+        const auto found = std::ranges::find(window->tabs, request->tab,
+            [](const auto &candidate) { return candidate.get(); });
+        if (found != window->tabs.end()) {
+            source = window.get();
+            break;
+        }
+    }
+    if (!source) return G_SOURCE_REMOVE;
+    create_window(owner, "vantage:new", false, source, source->private_mode, false);
+    move_tab_to_window(request->tab, owner->windows.back().get(), 0);
+    return G_SOURCE_REMOVE;
+}
+
+void delete_deferred_tab_detach(void *data) {
+    delete static_cast<DeferredTabDetach *>(data);
+}
+
+void queue_tab_detach(TabState *tab) {
+    auto *owner = tab->window->owner;
+    if (owner->pending_tab_detach) return;
+    owner->pending_tab_detach = tab;
+    owner->tab_detach_source = g_idle_add_full(G_PRIORITY_DEFAULT_IDLE, detach_tab_deferred,
+        new DeferredTabDetach{owner, tab}, delete_deferred_tab_detach);
+}
+
 gboolean tab_drag_cancel(GtkDragSource *, GdkDrag *, GdkDragCancelReason reason, TabState *tab) {
-    tab->window->owner->tab_drag_cancelled = reason != GDK_DRAG_CANCEL_NO_TARGET;
-    return reason == GDK_DRAG_CANCEL_NO_TARGET;
+    auto *owner = tab->window->owner;
+    owner->tab_drag_cancelled = true;
+    if (reason == GDK_DRAG_CANCEL_NO_TARGET) {
+        queue_tab_detach(tab);
+        return TRUE;
+    }
+    return FALSE;
 }
 
 gboolean expand_tab_drop_placeholder(void *data) {
@@ -1729,12 +1776,8 @@ void tab_drag_end(GtkDragSource *, GdkDrag *, gboolean, TabState *tab) {
     auto *owner = tab->window->owner;
     for (auto &window : owner->windows)
         if (!window->closed) clear_tab_drop_placeholder(window.get());
-    if (owner->dragging_tab == tab && !owner->tab_drop_completed && !owner->tab_drag_cancelled) {
-        auto *source = tab->window;
-        create_window(owner, "vantage:new", false, source, source->private_mode, false);
-        auto *target = owner->windows.back().get();
-        move_tab_to_window(tab, target, 0);
-    }
+    if (owner->dragging_tab == tab && !owner->tab_drop_completed && !owner->tab_drag_cancelled)
+        queue_tab_detach(tab);
     owner->dragging_tab = nullptr;
     owner->tab_drop_completed = false;
     owner->tab_drag_cancelled = false;
@@ -2685,8 +2728,8 @@ void install_style(GtkWidget *window) {
         ".browser-tab button:hover { background: transparent; }"
         ".browser-tab .tab-close:hover { background: transparent; color: #ff7657; }"
         ".tab-strip:drop(active) { border-color: transparent; outline: none; background: transparent; box-shadow: none; }"
-        ".tab-drop-placeholder { min-width: 0; padding: 5px 0; }"
-        ".tab-drop-marker { min-width: 2px; min-height: 26px; background: #ff7657; }"
+        ".tab-drop-placeholder { min-width: 0; min-height: 24px; padding: 0; }"
+        ".tab-drop-marker { min-width: 2px; min-height: 24px; background: #ff7657; }"
         ".new-tab { min-width: 28px; min-height: 28px; margin-left: 3px; }"
         ".navigation { background: #2c2c2c; border-bottom: 1px solid #393936; }"
         ".toolbar { padding: 6px 8px; background: #2c2c2c; }"
@@ -2780,6 +2823,7 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     state->tab_drop_placeholder = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
     gtk_widget_add_css_class(state->tab_drop_placeholder, "tab-drop-placeholder");
     gtk_widget_set_halign(state->tab_drop_placeholder, GTK_ALIGN_CENTER);
+    gtk_widget_set_valign(state->tab_drop_placeholder, GTK_ALIGN_CENTER);
     auto *tab_drop_marker = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
     gtk_widget_add_css_class(tab_drop_marker, "tab-drop-marker");
     gtk_box_append(GTK_BOX(state->tab_drop_placeholder), tab_drop_marker);
