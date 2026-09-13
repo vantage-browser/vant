@@ -6,7 +6,7 @@ WebKitGTK renders untrusted web content. A pinned copy of JS++ provides a
 separate, capability-limited automation runtime and is never used to execute
 page JavaScript.
 
-Version 0.1.0 is an early public preview, not a security-hardened release. The
+Version 0.1.1 is an early public preview, not a security-hardened release. The
 native shell currently provides tabs, navigation controls, persistent bookmarks,
 searchable history and downloads, private windows, printing, zoom controls and
 familiar Chromium-style keyboard shortcuts. Bookmarks can be added, edited and

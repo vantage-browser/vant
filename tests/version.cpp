@@ -4,6 +4,6 @@
 #include <string_view>
 
 int main() {
-    static_assert(vantage::version == std::string_view{"0.1.0"});
+    static_assert(vantage::version == std::string_view{"0.1.1"});
     assert(!vantage::version.empty());
 }
