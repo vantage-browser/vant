@@ -1666,7 +1666,9 @@ bool move_tab_to_window(TabState *tab, WindowState *target, std::size_t destinat
 
 GdkContentProvider *tab_drag_prepare(GtkDragSource *, double, double, TabState *tab) {
     if (!tab || tab->window->app_mode) return nullptr;
-    return gdk_content_provider_new_typed(G_TYPE_STRING, "vantage-tab");
+    // Keep tab drags private to this process. Advertising text lets desktop file
+    // managers treat a missed tab drop as text and offer to create a file.
+    return gdk_content_provider_new_typed(G_TYPE_POINTER, tab);
 }
 
 void tab_drag_begin(GtkDragSource *source, GdkDrag *, TabState *tab) {
@@ -1790,6 +1792,16 @@ gboolean tab_dropped(GtkDropTarget *, const GValue *, double x, double, WindowSt
     const auto destination = tab_drop_position(target, target->tab_strip, x);
     clear_tab_drop_placeholder(target);
     if (!move_tab_to_window(tab, target, destination)) return FALSE;
+    owner->tab_drop_completed = true;
+    return TRUE;
+}
+
+gboolean tab_dropped_outside_strip(GtkDropTarget *, const GValue *, double, double,
+    WindowState *target) {
+    auto *owner = target->owner;
+    auto *tab = owner->dragging_tab;
+    if (!tab) return FALSE;
+    queue_tab_detach(tab);
     owner->tab_drop_completed = true;
     return TRUE;
 }
@@ -2553,6 +2565,8 @@ TabState *new_tab(WindowState *state, const std::string &uri, bool load_initial)
     if (!state->app_mode) {
         auto *drag = gtk_drag_source_new();
         gtk_drag_source_set_actions(drag, GDK_ACTION_MOVE);
+        gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(drag), GDK_BUTTON_PRIMARY);
+        gtk_gesture_single_set_exclusive(GTK_GESTURE_SINGLE(drag), TRUE);
         gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(drag), GTK_PHASE_CAPTURE);
         g_signal_connect(drag, "prepare", G_CALLBACK(tab_drag_prepare), tab);
         g_signal_connect(drag, "drag-begin", G_CALLBACK(tab_drag_begin), tab);
@@ -2876,7 +2890,7 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     g_signal_connect(tab_scroll, "scroll", G_CALLBACK(tab_strip_scrolled), state);
     gtk_widget_add_controller(tab_strip, tab_scroll);
     if (!state->app_mode) {
-        auto *tab_drop = gtk_drop_target_new(G_TYPE_STRING, GDK_ACTION_MOVE);
+        auto *tab_drop = gtk_drop_target_new(G_TYPE_POINTER, GDK_ACTION_MOVE);
         g_signal_connect(tab_drop, "motion", G_CALLBACK(tab_drag_motion), state);
         g_signal_connect(tab_drop, "leave", G_CALLBACK(tab_drag_left), state);
         g_signal_connect(tab_drop, "drop", G_CALLBACK(tab_dropped), state);
@@ -3053,6 +3067,13 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     gtk_widget_set_halign(state->address_popover, GTK_ALIGN_FILL);
     gtk_widget_set_valign(state->address_popover, GTK_ALIGN_START);
     gtk_overlay_add_overlay(GTK_OVERLAY(state->chrome_overlay), state->address_popover);
+    if (!state->app_mode) {
+        // The tab strip handles reordering and window-to-window moves. A drop
+        // anywhere else in browser chrome or page content detaches the tab.
+        auto *detach_drop = gtk_drop_target_new(G_TYPE_POINTER, GDK_ACTION_MOVE);
+        g_signal_connect(detach_drop, "drop", G_CALLBACK(tab_dropped_outside_strip), state);
+        gtk_widget_add_controller(state->chrome_overlay, GTK_EVENT_CONTROLLER(detach_drop));
+    }
     gtk_window_set_child(GTK_WINDOW(state->window), state->chrome_overlay);
     install_style(state->window);
 
