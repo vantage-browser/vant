@@ -66,12 +66,12 @@ Use a local Unix-domain socket under `$XDG_RUNTIME_DIR` by default with normal s
 ## Sequential checkpoint checklist
 
 ### A0 - baseline and existing automation
-- [ ] Record current Vantage/WebKitGTK/GTK versions, clean Git state and build/test commands.
-- [ ] Map browser-model, WebKit, JS++ automation and `docs/AUTOMATION.md` ownership.
-- [ ] Inventory useful WebKit objects/APIs already used by Vantage.
-- [ ] Identify widget-coupled operations that should move behind model/services.
-- [ ] Add the trusted-agent versus untrusted-page rule to security docs.
-- [ ] Freeze existing human behavior with regression tests.
+- [x] Record current Vantage/WebKitGTK/GTK versions, clean Git state and build/test commands.
+- [x] Map browser-model, WebKit, JS++ automation and `docs/AUTOMATION.md` ownership.
+- [x] Inventory useful WebKit objects/APIs already used by Vantage.
+- [x] Identify widget-coupled operations that should move behind model/services.
+- [x] Add the trusted-agent versus untrusted-page rule to security docs.
+- [x] Freeze existing human behavior with regression tests.
 
 ### A1 - stable live-object identities
 - [ ] Give windows/tabs stable runtime IDs independent of GTK pointers and visible indices.

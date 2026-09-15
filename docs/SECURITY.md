@@ -26,3 +26,11 @@ file the user explicitly downloaded.
 The policy is wired to WebKit navigation decisions and TLS failures. The managed
 Linux gate launches the real WebKit view under Xvfb. A manual hostile-navigation
 pass on the target Wayland/Omarchy environment remains required before release.
+
+## Trusted agents are not trusted webpages
+
+Vantage's agent-native interface deliberately assumes that a local agent may be trusted with the user's normal machine authority. That agent may therefore receive broad application-side Vantage and WebKit control.
+
+This does not grant application privileges to web content. Pages remain untrusted input inside WebKit's normal process, origin, TLS and permission boundaries. Page JavaScript must never receive Vantage's agent RPC endpoint as a privileged page API, arbitrary native process/filesystem authority, cross-site browser-global data, or privileged JS++ host objects merely because it is loaded in Vantage.
+
+The authority direction is user/agent -> Vantage -> WebKit -> page. Never invert it into page -> privileged Vantage -> machine.
