@@ -145,12 +145,12 @@ Use a local Unix-domain socket under `$XDG_RUNTIME_DIR` by default with normal s
 - [x] Keep destructive operations explicit and machine-readable without fake agent-only confirmation barriers.
 
 ### A10 - developer diagnostics
-- [ ] Capture/expose bounded console events where WebKitGTK supports it.
-- [ ] Surface page JS errors and web-process termination.
-- [ ] Inventory request/response/resource observability and web-extension options.
-- [ ] Expose failed resources and useful network metadata where available.
-- [ ] Investigate response-body capture only if WebKitGTK supports it cleanly; document gaps instead of badly emulating CDP.
-- [ ] Add clear/reset/follow semantics.
+- [x] Capture/expose bounded console events where WebKitGTK supports it.
+- [x] Surface page JS errors and web-process termination.
+- [x] Inventory request/response/resource observability and web-extension options.
+- [x] Expose failed resources and useful network metadata where available.
+- [x] Investigate response-body capture only if WebKitGTK supports it cleanly; document gaps instead of badly emulating CDP.
+- [x] Add clear/reset/follow semantics.
 
 ### A11 - event streaming
 - [ ] Add subscriptions/streaming for navigation, lifecycle, load, console, downloads, permissions and useful events.

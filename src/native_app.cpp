@@ -51,6 +51,8 @@ struct TabState {
     bool hovered{};
     bool user_stopped{};
     bool recovering_blank_navigation{};
+    std::string last_load_error;
+    std::string last_web_process_termination;
 };
 
 struct WindowState {
@@ -1201,6 +1203,19 @@ void load_changed(WebKitWebView *view, WebKitLoadEvent event, TabState *tab) {
         tab->pending_web_uri.clear();
         tab->recovering_blank_navigation = false;
     }
+    // Install a page-world diagnostics recorder for trusted agent inspection. It
+    // only records page-visible console/error data; it exposes no Vantage host
+    // objects or RPC capability to the page.
+    constexpr auto agent_diagnostics_script = R"JS((()=>{
+      if(window.__vantageAgentDiagnostics)return;
+      const state=window.__vantageAgentDiagnostics={events:[],limit:500,dropped:0};
+      const push=(type,data)=>{if(state.events.length>=state.limit){state.events.shift();state.dropped++;}state.events.push({time:Date.now(),type,...data});};
+      for(const level of ['debug','log','info','warn','error']){const original=console[level].bind(console);console[level]=(...args)=>{try{push('console',{level,args:args.map(v=>{try{return typeof v==='string'?v:JSON.stringify(v)}catch{return String(v)}})})}catch{}return original(...args)}}
+      addEventListener('error',e=>push('error',{message:e.message||'',source:e.filename||'',line:e.lineno||0,column:e.colno||0}));
+      addEventListener('unhandledrejection',e=>push('unhandledrejection',{message:String(e.reason&&e.reason.stack||e.reason||'')}));
+    })())JS";
+    webkit_web_view_evaluate_javascript(view, agent_diagnostics_script, -1, nullptr,
+        "vantage-agent://diagnostics", nullptr, nullptr, nullptr);
     if (!page_uri || (!g_str_has_prefix(page_uri, "http://") && !g_str_has_prefix(page_uri, "https://"))) return;
     auto *request = new FaviconRequest{tab->window,
         WEBKIT_WEB_VIEW(g_object_ref(view)), nullptr, nullptr, page_uri};
@@ -1379,6 +1394,10 @@ gboolean decide_policy(WebKitWebView *view, WebKitPolicyDecision *decision,
     return TRUE;
 }
 
+void web_process_terminated(WebKitWebView *, WebKitWebProcessTerminationReason reason, TabState *tab) {
+    tab->last_web_process_termination = std::to_string(static_cast<int>(reason));
+}
+
 gboolean tls_failed(WebKitWebView *, const char *, GTlsCertificate *, GTlsCertificateFlags, TabState *) {
     return FALSE;
 }
@@ -1390,6 +1409,8 @@ gboolean load_failed(WebKitWebView *view, WebKitLoadEvent, const char *failing_u
         g_error_matches(error, WEBKIT_POLICY_ERROR,
             WEBKIT_POLICY_ERROR_FRAME_LOAD_INTERRUPTED_BY_POLICY_CHANGE);
     if (cancelled && !tab->user_stopped) return TRUE;
+    tab->last_load_error = std::string(failing_uri ? failing_uri : "") + ": " +
+        (error && error->message ? error->message : "unknown load error");
     auto *escaped_uri = g_markup_escape_text(failing_uri ? failing_uri : "Unknown address", -1);
     auto *escaped_message = g_markup_escape_text(error && error->message ? error->message : "Unknown error", -1);
     const std::string eyebrow = cancelled ? "Navigation stopped" : "Navigation error";
@@ -2598,6 +2619,7 @@ TabState *new_tab(WindowState *state, const std::string &uri, bool load_initial)
     g_signal_connect(tab->view, "notify::favicon", G_CALLBACK(favicon_changed), tab);
     g_signal_connect(tab->view, "load-changed", G_CALLBACK(load_changed), tab);
     g_signal_connect(tab->view, "load-failed", G_CALLBACK(load_failed), tab);
+    g_signal_connect(tab->view, "web-process-terminated", G_CALLBACK(web_process_terminated), tab);
     g_signal_connect(tab->view, "decide-policy", G_CALLBACK(decide_policy), tab);
     g_signal_connect(tab->view, "context-menu", G_CALLBACK(context_menu), tab);
     g_signal_connect(tab->view, "load-failed-with-tls-errors", G_CALLBACK(tls_failed), tab);
@@ -3256,6 +3278,19 @@ gboolean dispatch_agent_request(void *raw) {
         auto*t=agent_tab(owner,static_cast<vantage::TabId>(vantage::json_param_integer(r.params_json,"tab_id")));if(!t){done(vantage::agent_error(r.id,"not_found","tab not found"));return G_SOURCE_REMOVE;}
         const char *script=R"JS((()=>{const w=window;if(!w.__vantageAgentState){const s=w.__vantageAgentState={generation:1,refs:new Map()};new MutationObserver(()=>{s.generation++;s.refs.clear()}).observe(document,{subtree:true,childList:true,attributes:true,characterData:true})}const s=w.__vantageAgentState;s.refs.clear();let i=0;const out=[];const selector='a,button,input,textarea,select,summary,[role],[contenteditable="true"],[tabindex]';for(const e of document.querySelectorAll(selector)){if(i>=500)break;const rect=e.getBoundingClientRect();const role=e.getAttribute('role')||({A:'link',BUTTON:'button',INPUT:e.type==='checkbox'?'checkbox':e.type==='radio'?'radio':'textbox',TEXTAREA:'textbox',SELECT:'combobox',SUMMARY:'button'}[e.tagName]||e.tagName.toLowerCase());const name=(e.getAttribute('aria-label')||e.getAttribute('title')||e.innerText||e.value||e.placeholder||'').trim().replace(/\s+/g,' ').slice(0,240);const ref='@e'+s.generation+'_'+(++i);s.refs.set(ref,e);out.push({ref,role,name,visible:!!(rect.width||rect.height),disabled:!!e.disabled,checked:'checked'in e?!!e.checked:undefined})}return {generation:s.generation,url:location.href,title:document.title,elements:out}})())JS";
         const std::string wrapped="(()=>{const __v=eval("+javascript_string(script)+");return JSON.stringify(__v)})()"; webkit_web_view_evaluate_javascript(t->view,wrapped.c_str(),-1,nullptr,"vantage-agent://page.snapshot",nullptr,agent_javascript_finished,new AgentJavascriptResult{r.id,std::move(done)});return G_SOURCE_REMOVE;
+    }
+    if (r.method == "page.diagnostics" || r.method == "page.diagnostics.clear") {
+        auto*t=agent_tab(owner,static_cast<vantage::TabId>(vantage::json_param_integer(r.params_json,"tab_id")));if(!t){done(vantage::agent_error(r.id,"not_found","tab not found"));return G_SOURCE_REMOVE;}
+        const bool clear=r.method=="page.diagnostics.clear";
+        const std::string script=clear
+            ? "(()=>{const s=window.__vantageAgentDiagnostics;if(!s)return {events:[],dropped:0};const out={events:s.events,dropped:s.dropped};s.events=[];s.dropped=0;return out})()"
+            : "(()=>{const s=window.__vantageAgentDiagnostics;return s?{events:s.events,dropped:s.dropped}:{events:[],dropped:0}})()";
+        const std::string wrapped="(()=>JSON.stringify(eval("+javascript_string(script)+")))()";
+        webkit_web_view_evaluate_javascript(t->view,wrapped.c_str(),-1,nullptr,"vantage-agent://page.diagnostics",nullptr,agent_javascript_finished,new AgentJavascriptResult{r.id,std::move(done)});return G_SOURCE_REMOVE;
+    }
+    if (r.method == "page.native_diagnostics") {
+        auto*t=agent_tab(owner,static_cast<vantage::TabId>(vantage::json_param_integer(r.params_json,"tab_id")));if(!t){done(vantage::agent_error(r.id,"not_found","tab not found"));return G_SOURCE_REMOVE;}
+        const std::string out="{\"last_load_error\":"+vantage::json_string(t->last_load_error)+",\"last_web_process_termination\":"+vantage::json_string(t->last_web_process_termination)+"}";done(vantage::agent_ok(r.id,out));return G_SOURCE_REMOVE;
     }
     if (r.method == "page.javascript") {
         auto*t=agent_tab(owner,static_cast<vantage::TabId>(vantage::json_param_integer(r.params_json,"tab_id")));if(!t){done(vantage::agent_error(r.id,"not_found","tab not found"));return G_SOURCE_REMOVE;}

@@ -52,3 +52,15 @@ Unknown properties and unsupported property types fail explicitly. Agents should
 The trusted agent API uses Vantage's authoritative services rather than shadow copies: `downloads.list/cancel/remove`, `bookmarks.list/add/remove`, `history.list/clear`, `permissions.list/set`, `browser.cookies`, and `browser.profile`. Cookie access is scoped by a requested/current URI through WebKit's cookie manager; private profiles report non-persistence and continue to use Vantage's ephemeral network session.
 
 Destructive operations are explicit RPC methods and return structured success/errors. There is intentionally no extra agent-only confirmation ceremony: the caller is already a trusted same-user agent.
+
+## A10 diagnostics
+
+`page.diagnostics` returns the bounded page-world console/error/unhandled-rejection ring for a tab. `page.diagnostics.clear` returns then clears it. `page.native_diagnostics` reports the last top-level load error and WebKit web-process termination observed by Vantage. The page recorder is injected by Vantage but deliberately exposes no native Vantage object to page JavaScript.
+
+```sh
+vant agent call page.diagnostics '{"tab_id":1}'
+vant agent call page.diagnostics.clear '{"tab_id":1}'
+vant agent call page.native_diagnostics '{"tab_id":1}'
+```
+
+Vantage does not claim CDP-equivalent arbitrary response-body capture. Resource/network coverage remains capability-described and can expand when WebKitGTK offers a clean application-side primitive.
