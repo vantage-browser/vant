@@ -9,6 +9,7 @@ namespace vantage {
 enum class Permission { ask, allow, deny };
 struct Bookmark { std::string uri; std::string title; };
 struct HistoryEntry { std::int64_t id{}; std::string uri; std::string title; std::int64_t visited_at{}; };
+struct PermissionEntry { std::string origin; std::string capability; Permission decision{Permission::ask}; };
 struct DownloadEntry { std::int64_t id{}; std::string uri; std::string destination; std::string status; std::int64_t created_at{}; std::uint64_t received{}; std::uint64_t total{}; };
 class UserDataStore {
 public:
@@ -36,6 +37,7 @@ public:
     std::vector<DownloadEntry> downloads(std::size_t limit = 500) const;
     void set_permission(const std::string &origin, const std::string &capability, Permission permission);
     Permission permission(const std::string &origin, const std::string &capability) const;
+    std::vector<PermissionEntry> permissions() const;
     bool private_mode() const noexcept { return private_mode_; }
 private:
     sqlite3 *database_{};

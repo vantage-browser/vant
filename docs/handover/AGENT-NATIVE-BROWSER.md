@@ -137,12 +137,12 @@ Use a local Unix-domain socket under `$XDG_RUNTIME_DIR` by default with normal s
 - [x] Keep semantic aliases for common operations.
 
 ### A9 - browser-owned services and data
-- [ ] Expose downloads: list/inspect/wait/cancel/open/show-path and existing operations.
-- [ ] Expose bookmarks/history through authoritative Vantage services.
-- [ ] Expose cookies, website data/storage and permissions where supported.
-- [ ] Expose profile/session/private metadata without violating private-mode non-persistence.
-- [ ] Expose relevant Vantage/WebKit settings/capabilities.
-- [ ] Keep destructive operations explicit and machine-readable without fake agent-only confirmation barriers.
+- [x] Expose downloads: list/inspect/wait/cancel/open/show-path and existing operations.
+- [x] Expose bookmarks/history through authoritative Vantage services.
+- [x] Expose cookies, website data/storage and permissions where supported.
+- [x] Expose profile/session/private metadata without violating private-mode non-persistence.
+- [x] Expose relevant Vantage/WebKit settings/capabilities.
+- [x] Keep destructive operations explicit and machine-readable without fake agent-only confirmation barriers.
 
 ### A10 - developer diagnostics
 - [ ] Capture/expose bounded console events where WebKitGTK supports it.

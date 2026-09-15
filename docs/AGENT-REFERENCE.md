@@ -46,3 +46,9 @@ The initial semantic extractor covers native interactive controls, ARIA-role ele
 `webkit.webview`, `webkit.settings`, and `webkit.network` expose the readable GObject properties of the selected Vantage-owned WebKit objects. This deliberately provides broad, version-sensitive introspection without pretending arbitrary C pointers can be serialised safely across RPC. `webkit.setting.set` can set writable boolean/string/integer WebKitSettings properties. `describe` documents stable Vantage methods; `capabilities` identifies available namespaces.
 
 Unknown properties and unsupported property types fail explicitly. Agents should discover properties on the installed WebKitGTK rather than assuming every distribution exposes the same version.
+
+## Browser-owned data and services
+
+The trusted agent API uses Vantage's authoritative services rather than shadow copies: `downloads.list/cancel/remove`, `bookmarks.list/add/remove`, `history.list/clear`, `permissions.list/set`, `browser.cookies`, and `browser.profile`. Cookie access is scoped by a requested/current URI through WebKit's cookie manager; private profiles report non-persistence and continue to use Vantage's ephemeral network session.
+
+Destructive operations are explicit RPC methods and return structured success/errors. There is intentionally no extra agent-only confirmation ceremony: the caller is already a trusted same-user agent.
