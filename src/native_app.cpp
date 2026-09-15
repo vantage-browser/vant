@@ -3187,12 +3187,28 @@ std::string agent_capabilities_json() {
            "\"features\":[\"live-session\",\"stable-ids\",\"javascript\",\"semantic-snapshot\",\"semantic-interaction\",\"content-inspection\",\"webkit-introspection\",\"browser-data\"]}";
 }
 
+struct AgentJavascriptResult { std::string id; vantage::AgentReply reply; };
+void agent_javascript_finished(GObject *source, GAsyncResult *result, void *raw) {
+    std::unique_ptr<AgentJavascriptResult> state(static_cast<AgentJavascriptResult *>(raw)); GError *error=nullptr;
+    auto *value=webkit_web_view_evaluate_javascript_finish(WEBKIT_WEB_VIEW(source),result,&error);
+    if(error){state->reply(vantage::agent_error(state->id,"javascript_error",error->message?error->message:"JavaScript evaluation failed"));g_error_free(error);if(value)g_object_unref(value);return;}
+    std::string out="null";
+    if(value){ if(jsc_value_is_string(value)){auto *str=jsc_value_to_string(value);if(str&&*str)out=str;g_free(str);} else {auto *str=jsc_value_to_string(value);out=vantage::json_string(str?str:"");g_free(str);} g_object_unref(value); }
+    state->reply(vantage::agent_ok(state->id,out));
+}
+
 gboolean dispatch_agent_request(void *raw) {
     std::unique_ptr<AgentDispatch> d(static_cast<AgentDispatch *>(raw));
     auto &r = d->request; auto done = std::move(d->reply); auto *owner = d->owner;
     if (r.method == "status") { done(vantage::agent_ok(r.id, "{\"running\":true,\"socket\":" + vantage::json_string(vantage::agent_socket_path()) + "}")); return G_SOURCE_REMOVE; }
     if (r.method == "version") { done(vantage::agent_ok(r.id, "{\"protocol\":1,\"vantage\":" + vantage::json_string(vantage::version) + ",\"native\":" + vantage::json_string(vantage::native_versions()) + "}")); return G_SOURCE_REMOVE; }
     if (r.method == "capabilities") { done(vantage::agent_ok(r.id, agent_capabilities_json())); return G_SOURCE_REMOVE; }
+    if (r.method == "page.javascript") {
+        auto*t=agent_tab(owner,static_cast<vantage::TabId>(vantage::json_param_integer(r.params_json,"tab_id")));if(!t){done(vantage::agent_error(r.id,"not_found","tab not found"));return G_SOURCE_REMOVE;}
+        auto script=vantage::json_param_string(r.params_json,"script");if(script.empty()){done(vantage::agent_error(r.id,"invalid_params","script required"));return G_SOURCE_REMOVE;}
+        const std::string wrapped="(()=>{const __v=eval("+javascript_string(script)+");const __j=JSON.stringify(__v);return __j===undefined?'null':__j})()";
+        webkit_web_view_evaluate_javascript(t->view,wrapped.c_str(),-1,nullptr,"vantage-agent://page.javascript",nullptr,agent_javascript_finished,new AgentJavascriptResult{r.id,std::move(done)});return G_SOURCE_REMOVE;
+    }
     if (r.method == "browser.windows") {
         std::string out="["; bool first=true; for (auto &w:owner->windows) if(!w->closed){if(!first)out+=",";first=false;out+="{\"id\":"+std::to_string(w->id)+",\"private\":"+(w->private_mode?"true":"false")+",\"tabs\":"+std::to_string(w->tabs.size())+"}";} out+="]"; done(vantage::agent_ok(r.id,out)); return G_SOURCE_REMOVE;
     }

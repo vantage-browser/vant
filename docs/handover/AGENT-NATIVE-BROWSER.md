@@ -97,13 +97,13 @@ Use a local Unix-domain socket under `$XDG_RUNTIME_DIR` by default with normal s
 - [x] Verify human and agent actions interleave safely.
 
 ### A4 - arbitrary page JavaScript
-- [ ] Evaluate arbitrary JavaScript against an explicit tab/frame.
-- [ ] Return structured JSON-safe results where possible.
-- [ ] Accept script files/stdin for large programs.
-- [ ] Surface useful JS exception information.
-- [ ] Define main-frame/subframe targeting.
-- [ ] Investigate/document page-world versus isolated-world execution.
-- [ ] Keep privileged Vantage JS++ hosts out of page realms.
+- [x] Evaluate arbitrary JavaScript against an explicit tab/frame.
+- [x] Return structured JSON-safe results where possible.
+- [x] Accept script files/stdin for large programs.
+- [x] Surface useful JS exception information.
+- [x] Define main-frame/subframe targeting.
+- [x] Investigate/document page-world versus isolated-world execution.
+- [x] Keep privileged Vantage JS++ hosts out of page realms.
 
 ### A5 - semantic snapshots and element references
 - [ ] Produce compact agent-oriented page snapshots.
