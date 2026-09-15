@@ -126,10 +126,15 @@ make benchmark
 
 `make test` runs the core suites and checks that the executable links against
 the installed GTK and WebKitGTK runtime. `make test-sanitize` runs the portable
-C++ and embedded-JS++ suites under ASan/UBSan. `make vendor-check` verifies that
-the embedded JS++ files exactly match the recorded upstream commit; it expects
-the sibling `js` repository to be present, or an explicit source can be supplied
-directly to the checker:
+C++ and embedded-JS++ suites under ASan/UBSan. `make vendor-check` verifies
+release-vendor consistency: Vantage's vendored JS++ pin and manifest version
+must match the sibling JS++ repository's latest applicable release tag (stable
+`v?N.N.N`, compared version-aware and peeled through annotated tags). An
+unreleased sibling `HEAD` is informational and never a mismatch; the check
+fails explicitly when no applicable release tag exists or the manifest version
+does not correspond to the latest release. It expects the sibling `js`
+repository to be present, or an explicit source can be supplied directly to
+the checker:
 
 ```sh
 python3 tools/vendor_jspp.py --check --source /path/to/js

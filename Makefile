@@ -104,6 +104,7 @@ test-unit: $(BUILD)/test_agent_rpc $(BUILD)/test_application $(BUILD)/test_navig
 	./$(BUILD)/test_version
 	python3 tests/desktop_entry.py
 	python3 tests/agent_security.py
+	python3 tools/test_vendor_jspp.py
 	./$(BUILD)/test_jspp_adapter
 	./$(BUILD)/test_automation
 
