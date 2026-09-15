@@ -8,6 +8,8 @@ NATIVE_LIBS = $(shell $(PKG_CONFIG) --libs gtk4 webkitgtk-6.0)
 SQLITE_CFLAGS = $(shell $(PKG_CONFIG) --cflags sqlite3)
 SQLITE_LIBS = $(shell $(PKG_CONFIG) --libs sqlite3)
 BUILD := build
+AGENT_SOURCES := src/agent_rpc.cpp
+AGENT_OBJECTS := $(AGENT_SOURCES:src/%.cpp=$(BUILD)/%.o)
 CORE_SOURCES := src/application.cpp src/navigation.cpp src/browser_model.cpp src/session_store.cpp src/user_data.cpp src/preferences.cpp src/launch_options.cpp
 CORE_OBJECTS := $(CORE_SOURCES:src/%.cpp=$(BUILD)/%.o)
 JSPP_DIR := third_party/jspp
@@ -50,7 +52,7 @@ $(BUILD)/jspp/%.o: $(JSPP_DIR)/src/%.cpp | $(BUILD)/jspp
 $(BUILD)/jspp_adapter.o: src/jspp_adapter.cpp src/jspp_adapter.h | $(BUILD)
 	$(CXX) $(CPPFLAGS) -I$(JSPP_DIR)/include $(CXXFLAGS) -c $< -o $@
 
-$(BUILD)/vant: src/main.cpp $(CORE_OBJECTS) $(BUILD)/native_app.o $(BUILD)/jspp_adapter.o $(JSPP_OBJECTS)
+$(BUILD)/vant: src/main.cpp $(CORE_OBJECTS) $(AGENT_OBJECTS) $(BUILD)/native_app.o $(BUILD)/jspp_adapter.o $(JSPP_OBJECTS)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(NATIVE_CFLAGS) $(SQLITE_CFLAGS) $^ $(NATIVE_LIBS) $(SQLITE_LIBS) -o $@
 
 $(BUILD)/test_application: tests/application.cpp $(CORE_OBJECTS)

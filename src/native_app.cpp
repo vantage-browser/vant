@@ -2,6 +2,8 @@
 
 #include "navigation.h"
 #include "browser_model.h"
+#include "agent_rpc.h"
+#include "version.h"
 #include "preferences.h"
 #include "user_data.h"
 
@@ -16,6 +18,7 @@
 #include <cstring>
 #include <filesystem>
 #include <iomanip>
+#include <iostream>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -135,6 +138,7 @@ struct ApplicationState {
     bool tab_drop_completed{};
     bool tab_drag_cancelled{};
     std::unique_ptr<vantage::UserDataStore> data;
+    std::unique_ptr<vantage::AgentRpcServer> agent_rpc;
     std::vector<DownloadContext *> active_downloads;
     std::vector<std::unique_ptr<WindowState>> windows;
     ~ApplicationState() {
@@ -3150,6 +3154,53 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     }
 }
 
+
+struct AgentDispatch {
+    ApplicationState *owner{};
+    vantage::AgentRequest request;
+    vantage::AgentReply reply;
+};
+
+WindowState *agent_window(ApplicationState *owner, vantage::WindowId id) {
+    if (!id && !owner->windows.empty()) return owner->windows.front().get();
+    for (auto &window : owner->windows) if (window->id == id && !window->closed) return window.get();
+    return nullptr;
+}
+TabState *agent_tab(ApplicationState *owner, vantage::TabId id) {
+    if (!id) {
+        for (auto &window : owner->windows) if (!window->closed && window->view) return find_tab(window.get(), window->view);
+        return nullptr;
+    }
+    for (auto &window : owner->windows) for (auto &tab : window->tabs) if (tab->id == id) return tab.get();
+    return nullptr;
+}
+std::string agent_tab_json(TabState *tab) {
+    const char *uri = tab->view ? webkit_web_view_get_uri(tab->view) : nullptr;
+    const char *title = tab->view ? webkit_web_view_get_title(tab->view) : nullptr;
+    return "{\"id\":" + std::to_string(tab->id) + ",\"window_id\":" + std::to_string(tab->window->id) +
+        ",\"uri\":" + vantage::json_string(uri ? uri : tab->display_uri) + ",\"title\":" + vantage::json_string(title ? title : "") +
+        ",\"loading\":" + (tab->view && webkit_web_view_is_loading(tab->view) ? "true" : "false") +
+        ",\"private\":" + (tab->window->private_mode ? "true" : "false") + "}";
+}
+std::string agent_capabilities_json() {
+    return "{\"protocol\":1,\"namespaces\":[\"browser\",\"page\",\"webkit\",\"downloads\",\"bookmarks\",\"history\",\"permissions\"],"
+           "\"features\":[\"live-session\",\"stable-ids\",\"javascript\",\"semantic-snapshot\",\"semantic-interaction\",\"content-inspection\",\"webkit-introspection\",\"browser-data\"]}";
+}
+
+gboolean dispatch_agent_request(void *raw) {
+    std::unique_ptr<AgentDispatch> d(static_cast<AgentDispatch *>(raw));
+    auto &r = d->request; auto done = std::move(d->reply); auto *owner = d->owner;
+    if (r.method == "status") { done(vantage::agent_ok(r.id, "{\"running\":true,\"socket\":" + vantage::json_string(vantage::agent_socket_path()) + "}")); return G_SOURCE_REMOVE; }
+    if (r.method == "version") { done(vantage::agent_ok(r.id, "{\"protocol\":1,\"vantage\":" + vantage::json_string(vantage::version) + ",\"native\":" + vantage::json_string(vantage::native_versions()) + "}")); return G_SOURCE_REMOVE; }
+    if (r.method == "capabilities") { done(vantage::agent_ok(r.id, agent_capabilities_json())); return G_SOURCE_REMOVE; }
+    done(vantage::agent_error(r.id, "method_not_found", "unknown agent method"));
+    return G_SOURCE_REMOVE;
+}
+
+void handle_agent_request(ApplicationState *owner, vantage::AgentRequest request, vantage::AgentReply reply) {
+    g_main_context_invoke(nullptr, dispatch_agent_request, new AgentDispatch{owner, std::move(request), std::move(reply)});
+}
+
 void activate(GtkApplication *application, void *user_data) {
     auto *owner = static_cast<ApplicationState *>(user_data);
     owner->application = application;
@@ -3193,6 +3244,9 @@ int run_native(const NativeLaunchOptions &options) {
     state.data = std::make_unique<UserDataStore>(
         std::filesystem::path(g_get_user_data_dir()) / "vantage-browser" / "browser.sqlite3", options.smoke);
     state.data->reconcile_downloads();
+    state.agent_rpc = std::make_unique<AgentRpcServer>([&state](AgentRequest request, AgentReply reply) { handle_agent_request(&state, std::move(request), std::move(reply)); });
+    std::string agent_error_message;
+    if (!state.agent_rpc->start(&agent_error_message)) std::cerr << "vant: agent RPC unavailable: " << agent_error_message << '\n';
     g_signal_connect(application.get(), "activate", G_CALLBACK(activate), &state);
     return g_application_run(G_APPLICATION(application.get()), 0, nullptr);
 }

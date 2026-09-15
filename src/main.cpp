@@ -1,4 +1,5 @@
 #include "application.h"
+#include "agent_rpc.h"
 #include "launch_options.h"
 #include "native_app.h"
 #include "preferences.h"
@@ -18,11 +19,16 @@ void usage(std::ostream &out) {
         << "       vant --app URL [--fullscreen]\n"
         << "       vant --app=URL [--fullscreen]\n"
         << "       vant settings video-rendering [compatibility|accelerated]\n"
+        << "       vant agent <status|version|capabilities|call> ...\n"
         << "       vant [--headless-smoke|--native-probe|--native-smoke|--version|--help]\n";
 }
 }
 
 int main(int argc, char **argv) {
+    if (argc >= 2 && std::string_view(argv[1]) == "agent") {
+        std::vector<std::string_view> args; for (int i=2;i<argc;++i) args.emplace_back(argv[i]);
+        return vantage::run_agent_cli(args);
+    }
     if (argc >= 2 && std::string_view(argv[1]) == "settings") {
         if (argc != 4 || std::string_view(argv[2]) != "video-rendering" ||
             (std::string_view(argv[3]) != "compatibility" && std::string_view(argv[3]) != "accelerated")) {

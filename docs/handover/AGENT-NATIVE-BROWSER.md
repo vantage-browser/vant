@@ -81,12 +81,12 @@ Use a local Unix-domain socket under `$XDG_RUNTIME_DIR` by default with normal s
 - [x] Test create/reorder/move/close/restore/multi-window lifecycle.
 
 ### A2 - versioned local RPC
-- [ ] Add a Vantage-owned Unix-domain-socket RPC service.
-- [ ] Define protocol versions, request IDs, structured errors and bounded messages.
-- [ ] Bind socket lifecycle safely to the running Vantage instance.
-- [ ] Add `vant agent status`, `version`, `capabilities` and machine-readable discovery.
-- [ ] Keep malformed/slow clients from blocking GTK/WebKit.
-- [ ] Model asynchronous WebKit work asynchronously.
+- [x] Add a Vantage-owned Unix-domain-socket RPC service.
+- [x] Define protocol versions, request IDs, structured errors and bounded messages.
+- [x] Bind socket lifecycle safely to the running Vantage instance.
+- [x] Add `vant agent status`, `version`, `capabilities` and machine-readable discovery.
+- [x] Keep malformed/slow clients from blocking GTK/WebKit.
+- [x] Model asynchronous WebKit work asynchronously.
 
 ### A3 - window/tab/browser control
 - [ ] List/select/create/close windows and tabs.
