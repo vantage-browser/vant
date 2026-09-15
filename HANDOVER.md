@@ -41,6 +41,20 @@ automation, commands, internal tools and later extensions. Arbitrary page
 JavaScript must continue to run in WebKit. Do not expose JS++ directly to page
 content, DOM objects or unsanitised WebKit callbacks.
 
+## Agent-native browser campaign
+
+The dedicated implementation game plan for letting trusted agents drive the same
+live Vantage browser as the user, with broad WebKit/Vantage access while
+preserving the untrusted-page boundary, is in
+`docs/handover/AGENT-NATIVE-BROWSER.md`.
+
+Treat this as a first-class Vantage product campaign, not a Cortex-specific
+integration. Keep the dedicated handover, `docs/AUTOMATION.md`, security
+documentation, CLI/RPC reference material and the public website synchronized as
+checkpoints land. Human-facing documentation should remain detailed and
+example-rich but reasonably digestible; agent-oriented reference pages may be
+deliberately exhaustive and machine-oriented.
+
 ## Vendored JS++ policy
 
 Follow the same broad integration model used when Nift embeds Minify++, Markup++
