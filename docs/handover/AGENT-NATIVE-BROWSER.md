@@ -160,11 +160,11 @@ Use a local Unix-domain socket under `$XDG_RUNTIME_DIR` by default with normal s
 - [x] Ensure slow clients cannot stall Vantage/WebKit.
 
 ### A12 - multi-controller correctness
-- [ ] Stress simultaneous human/agent operation of one tab.
-- [ ] Stress multiple agent clients across same/different tabs.
-- [ ] Define close/navigation/focus races during outstanding async work.
-- [ ] Fail stale references/cancelled operations cleanly.
-- [ ] Test disconnects, crashes, restart and session restore with RPC enabled.
+- [x] Stress simultaneous human/agent operation of one tab.
+- [x] Stress multiple agent clients across same/different tabs.
+- [x] Define close/navigation/focus races during outstanding async work.
+- [x] Fail stale references/cancelled operations cleanly.
+- [x] Test disconnects, crashes, restart and session restore with RPC enabled.
 
 ### A13 - agent-oriented CLI quality
 - [ ] Make common operations one-shot shell commands with stable exit codes.

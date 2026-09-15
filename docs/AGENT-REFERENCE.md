@@ -74,3 +74,7 @@ vant agent call events.since '{"after":0,"limit":256}'
 vant agent events
 vant agent call events.clear '{}'
 ```
+
+## A12 multiple controllers and races
+
+The RPC acceptor services clients independently, so one slow request does not serialize unrelated agent clients. WebKit mutations are still marshalled onto GTK's main context. Window/tab IDs and semantic refs fail explicitly after closure/invalidation; they are never rebound to a replacement object. Outstanding page operations can therefore complete, fail stale/not-found, or time out without retargeting another tab.
