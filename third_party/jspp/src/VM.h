@@ -19,6 +19,7 @@ struct ObjectValue { std::unordered_map<std::string,js_value>properties;std::uno
 struct ArrayValue { std::vector<js_value>elements;std::unordered_map<std::string,js_value>properties;std::unordered_map<std::string,PropertyAttributes>attributes;std::shared_ptr<ObjectValue>prototype; };
 class Heap {
 public:
+ ~Heap(){collect({});}
  std::shared_ptr<Environment>environment();std::shared_ptr<FunctionObject>function();
  std::shared_ptr<ObjectValue>object();std::shared_ptr<ArrayValue>array();
  std::size_t allocations()const{return allocations_;}std::size_t tracked()const;
@@ -35,6 +36,24 @@ private:
 };
 enum class CompletionKind { Normal,Return,Throw,Break,Continue };
 struct Completion { CompletionKind kind=CompletionKind::Normal;js_value value;std::size_t target=0,target_scope=0; };
+// Standalone execution lifetime contract (PC0V corrective fix):
+// Ownership is a single coherent model: every execution runs against one Heap,
+// and the returned completion value is only ever reclaimable while that Heap
+// (or a value that pins it) is live.
+// - heap!=nullptr (caller-owned heap): the caller owns every root, including any
+//   supplied global and live handles. execute_completion performs no collection
+//   at exit; the caller drives Heap::collect. The runtime embedding path uses
+//   this rule and collects after each evaluation. global may be supplied or
+//   null; when null the heap allocates a fresh top-level environment.
+// - heap==nullptr && global==nullptr (call-local heap): the call owns a local
+//   Heap. On every exit from run() the local heap is swept once, rooting only
+//   Completion.value. A heap-backed completion value then pins the local heap
+//   through js_value::heap, so a self-referential returned graph stays valid
+//   and is reclaimed when the value is released (Heap teardown collection).
+// - heap==nullptr && global!=nullptr is rejected deterministically: a caller-
+//   owned persistent global cannot be tracked by a call-local heap, and the
+//   final sweep (or the local heap disappearing) would lose or mutate live
+//   externally owned state.
 bool execute_completion(const Bytecode&,Completion&,std::string&error,std::size_t instruction_budget=1000000,Heap*heap=nullptr,std::shared_ptr<Environment>global={},std::size_t stack_limit=512);
 bool execute(const Bytecode&,js_value&,std::string&error,std::size_t instruction_budget=1000000,Heap*heap=nullptr,std::shared_ptr<Environment>global={},std::size_t stack_limit=512);
 }

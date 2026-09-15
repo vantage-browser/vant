@@ -7,7 +7,7 @@
 #include <vector>
 
 namespace jspp { struct FunctionObject;struct ObjectValue;struct ArrayValue;struct Environment;class Heap; }
-struct js_value { js_value_kind kind=JS_VALUE_UNDEFINED; bool boolean=false; double number=0; std::string string; std::shared_ptr<jspp::FunctionObject> function;std::shared_ptr<jspp::ObjectValue> object;std::shared_ptr<jspp::ArrayValue> array; };
+struct js_value { js_value_kind kind=JS_VALUE_UNDEFINED; bool boolean=false; double number=0; std::string string; std::shared_ptr<jspp::FunctionObject> function;std::shared_ptr<jspp::ObjectValue> object;std::shared_ptr<jspp::ArrayValue> array;std::shared_ptr<jspp::Heap> heap; };
 struct js_runtime {
  std::thread::id owner=std::this_thread::get_id();
  std::string error;
