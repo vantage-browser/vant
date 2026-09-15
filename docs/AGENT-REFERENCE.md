@@ -64,3 +64,13 @@ vant agent call page.native_diagnostics '{"tab_id":1}'
 ```
 
 Vantage does not claim CDP-equivalent arbitrary response-body capture. Resource/network coverage remains capability-described and can expand when WebKitGTK offers a clean application-side primitive.
+
+## A11 event stream
+
+Vantage maintains a bounded application-side event sequence. `events.since` is cursor-based and reconnect-safe: pass the last sequence you consumed as `after`. The ring is bounded; `dropped` reports overflow. The CLI aliases `vant agent events` and `vant agent watch` to an immediate event read; long-running clients should loop `events.since` themselves so a slow reader never holds the GTK/WebKit thread open.
+
+```sh
+vant agent call events.since '{"after":0,"limit":256}'
+vant agent events
+vant agent call events.clear '{}'
+```

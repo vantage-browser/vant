@@ -153,11 +153,11 @@ Use a local Unix-domain socket under `$XDG_RUNTIME_DIR` by default with normal s
 - [x] Add clear/reset/follow semantics.
 
 ### A11 - event streaming
-- [ ] Add subscriptions/streaming for navigation, lifecycle, load, console, downloads, permissions and useful events.
-- [ ] Bound queues and define overflow/backpressure.
-- [ ] Define disconnect/reconnect behavior.
-- [ ] Add `vant agent events`/`watch`.
-- [ ] Ensure slow clients cannot stall Vantage/WebKit.
+- [x] Add subscriptions/streaming for navigation, lifecycle, load, console, downloads, permissions and useful events.
+- [x] Bound queues and define overflow/backpressure.
+- [x] Define disconnect/reconnect behavior.
+- [x] Add `vant agent events`/`watch`.
+- [x] Ensure slow clients cannot stall Vantage/WebKit.
 
 ### A12 - multi-controller correctness
 - [ ] Stress simultaneous human/agent operation of one tab.

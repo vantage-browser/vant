@@ -55,6 +55,10 @@ $(BUILD)/jspp_adapter.o: src/jspp_adapter.cpp src/jspp_adapter.h | $(BUILD)
 $(BUILD)/vant: src/main.cpp $(CORE_OBJECTS) $(AGENT_OBJECTS) $(BUILD)/native_app.o $(BUILD)/jspp_adapter.o $(JSPP_OBJECTS)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(NATIVE_CFLAGS) $(SQLITE_CFLAGS) $^ $(NATIVE_LIBS) $(SQLITE_LIBS) -o $@
 
+
+$(BUILD)/test_agent_rpc: tests/agent_rpc.cpp $(BUILD)/agent_rpc.o
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $^ -pthread -o $@
+
 $(BUILD)/test_application: tests/application.cpp $(CORE_OBJECTS)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(SQLITE_CFLAGS) $^ $(SQLITE_LIBS) -o $@
 
@@ -88,7 +92,8 @@ $(BUILD)/automation.o: src/automation.cpp src/automation.h | $(BUILD)
 $(BUILD)/test_automation: tests/automation.cpp $(BUILD)/automation.o $(CORE_OBJECTS) $(JSPP_OBJECTS)
 	$(CXX) $(CPPFLAGS) -I$(JSPP_DIR)/include $(CXXFLAGS) $^ $(SQLITE_LIBS) -pthread -o $@
 
-test-unit: $(BUILD)/test_application $(BUILD)/test_navigation $(BUILD)/test_browser_model $(BUILD)/test_session_store $(BUILD)/test_user_data $(BUILD)/test_preferences $(BUILD)/test_launch_options $(BUILD)/test_version $(BUILD)/test_jspp_adapter $(BUILD)/test_automation
+test-unit: $(BUILD)/test_agent_rpc $(BUILD)/test_application $(BUILD)/test_navigation $(BUILD)/test_browser_model $(BUILD)/test_session_store $(BUILD)/test_user_data $(BUILD)/test_preferences $(BUILD)/test_launch_options $(BUILD)/test_version $(BUILD)/test_jspp_adapter $(BUILD)/test_automation
+	./$(BUILD)/test_agent_rpc
 	./$(BUILD)/test_application
 	./$(BUILD)/test_navigation
 	./$(BUILD)/test_browser_model
