@@ -114,12 +114,12 @@ Use a local Unix-domain socket under `$XDG_RUNTIME_DIR` by default with normal s
 - [x] Test SPAs, shadow DOM, iframes, duplicate labels and mutating DOMs.
 
 ### A6 - semantic interaction
-- [ ] Add click/focus/fill/type/clear/select/check/scroll/key operations.
-- [ ] Accept semantic refs and explicit selectors where useful.
-- [ ] Add waits for element/text/state.
-- [ ] Preserve normal browser event semantics for user-like interaction.
-- [ ] Return actionable stale/hidden/disabled/detached errors.
-- [ ] Keep arbitrary JS as the unrestricted escape hatch.
+- [x] Add click/focus/fill/type/clear/select/check/scroll/key operations.
+- [x] Accept semantic refs and explicit selectors where useful.
+- [x] Add waits for element/text/state.
+- [x] Preserve normal browser event semantics for user-like interaction.
+- [x] Return actionable stale/hidden/disabled/detached errors.
+- [x] Keep arbitrary JS as the unrestricted escape hatch.
 
 ### A7 - rendered/content inspection
 - [ ] Add viewport/full-page screenshots where WebKitGTK permits reliable capture.

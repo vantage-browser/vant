@@ -30,3 +30,7 @@ This execution is initiated by the trusted Vantage application against the page.
 `page.snapshot` returns a compact semantic inventory of up to 500 interactive elements with role, accessible-ish name/text, visibility/state and references such as `@e4_17`. The first number is the page's semantic generation. A MutationObserver invalidates all references whenever the DOM mutates; a new snapshot creates fresh refs. Vantage never silently retargets a stale ref to a different element.
 
 The initial semantic extractor covers native interactive controls, ARIA-role elements, contenteditable and tabindex targets. Shadow DOM and cross-origin iframe depth are reported as current limitations rather than bypassing WebKit's page-origin rules.
+
+## Semantic interaction and waits
+
+`page.interact` accepts `action` plus either a semantic `ref` or CSS `selector`. Actions are `click`, `focus`, `fill`, `type`, `clear`, `select`, `check`, `uncheck`, `scroll`, and `key`. Ref lookup never falls back to a different element after invalidation. `page.wait` polls without blocking GTK/WebKit for a selector, current semantic ref, or visible body text, with `timeout_ms` bounded to 30 seconds.
