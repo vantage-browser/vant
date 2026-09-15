@@ -78,3 +78,22 @@ vant agent call events.clear '{}'
 ## A12 multiple controllers and races
 
 The RPC acceptor services clients independently, so one slow request does not serialize unrelated agent clients. WebKit mutations are still marshalled onto GTK's main context. Window/tab IDs and semantic refs fail explicitly after closure/invalidation; they are never rebound to a replacement object. Outstanding page operations can therefore complete, fail stale/not-found, or time out without retargeting another tab.
+
+## A13 CLI contract
+
+The CLI has stable exit classes: 0 success, 1 runtime/RPC failure, 2 invalid CLI usage. Default output is the concise RPC result; `--json` emits the complete protocol envelope. Common one-shot aliases avoid hand-writing RPC JSON.
+
+```sh
+vant agent tabs
+vant agent open https://example.com 1
+vant agent snapshot 1
+vant agent click @e3_4 1
+vant agent fill @e3_7 hello 1
+vant agent diagnostics 1
+vant agent --json capabilities
+vant agent call page.content '{"tab_id":1,"kind":"text"}'
+cat script.js | vant agent js -
+vant agent js --file script.js
+```
+
+`call` remains the universal escape hatch. `capabilities` and `describe` are authoritative for runtime discovery.

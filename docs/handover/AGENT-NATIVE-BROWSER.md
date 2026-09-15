@@ -167,12 +167,12 @@ Use a local Unix-domain socket under `$XDG_RUNTIME_DIR` by default with normal s
 - [x] Test disconnects, crashes, restart and session restore with RPC enabled.
 
 ### A13 - agent-oriented CLI quality
-- [ ] Make common operations one-shot shell commands with stable exit codes.
-- [ ] Provide global JSON output plus concise terminal output.
-- [ ] Support stdin/script-file input.
-- [ ] Keep commands composable/discoverable.
-- [ ] Add examples for coding workflows, forms, inspection, downloads and debugging.
-- [ ] Ensure `--help`, `capabilities` and `describe` let an unfamiliar agent teach itself the API.
+- [x] Make common operations one-shot shell commands with stable exit codes.
+- [x] Provide global JSON output plus concise terminal output.
+- [x] Support stdin/script-file input.
+- [x] Keep commands composable/discoverable.
+- [x] Add examples for coding workflows, forms, inspection, downloads and debugging.
+- [x] Ensure `--help`, `capabilities` and `describe` let an unfamiliar agent teach itself the API.
 
 ### A14 - direct integrations without coupling
 - [ ] Document RPC for non-CLI clients.
