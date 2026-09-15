@@ -182,13 +182,13 @@ Use a local Unix-domain socket under `$XDG_RUNTIME_DIR` by default with normal s
 - [x] Validate at least one unrelated coding-agent workflow.
 
 ### A15 - security-boundary certification
-- [ ] Verify WebKit web-process sandboxing remains enabled.
-- [ ] Verify page JS cannot invoke Vantage RPC merely by being loaded.
-- [ ] Verify page content receives no privileged JS++ Vantage host objects.
-- [ ] Verify cross-origin/TLS/permission security is not disabled for automation convenience.
-- [ ] Test hostile pages, navigation races, malformed RPC, oversized payloads, stale handles and malicious JS results.
-- [ ] Run sanitizers and lifecycle/leak tests over repeated agent sessions.
-- [ ] Document clearly: this boundary protects the user from websites, not from their deliberately trusted local agent.
+- [x] Verify WebKit web-process sandboxing remains enabled.
+- [x] Verify page JS cannot invoke Vantage RPC merely by being loaded.
+- [x] Verify page content receives no privileged JS++ Vantage host objects.
+- [x] Verify cross-origin/TLS/permission security is not disabled for automation convenience.
+- [x] Test hostile pages, navigation races, malformed RPC, oversized payloads, stale handles and malicious JS results.
+- [x] Run sanitizers and lifecycle/leak tests over repeated agent sessions.
+- [x] Document clearly: this boundary protects the user from websites, not from their deliberately trusted local agent.
 
 ### A16 - performance and sustained use
 - [ ] Measure RPC overhead, snapshot latency/size and interaction latency.

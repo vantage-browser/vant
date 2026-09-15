@@ -108,3 +108,7 @@ python3 tools/vant_agent.py page.snapshot '{"tab_id":1}'
 ```
 
 An MCP adapter is intentionally optional and should translate MCP calls onto this same RPC rather than becoming a second browser-control implementation. This keeps Vantage equally usable from Cortex, Warden, Codex, Claude Code, OpenCode, shell scripts and custom agents.
+
+## A15 security boundary
+
+RPC input is bounded to 1 MiB and the local socket is mode 0600. Vantage does not expose the RPC or native/JS++ host objects into web pages. Agent-requested page JavaScript remains page JavaScript; it does not become native application code. WebKit's origin, TLS, permission, web-process and sandbox boundaries remain intact.

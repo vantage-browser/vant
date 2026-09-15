@@ -34,3 +34,9 @@ Vantage's agent-native interface deliberately assumes that a local agent may be 
 This does not grant application privileges to web content. Pages remain untrusted input inside WebKit's normal process, origin, TLS and permission boundaries. Page JavaScript must never receive Vantage's agent RPC endpoint as a privileged page API, arbitrary native process/filesystem authority, cross-site browser-global data, or privileged JS++ host objects merely because it is loaded in Vantage.
 
 The authority direction is user/agent -> Vantage -> WebKit -> page. Never invert it into page -> privileged Vantage -> machine.
+
+## Agent-native browser boundary
+
+Vantage deliberately gives a trusted same-user agent broad application-side browser authority. This does **not** grant web content application authority. The RPC socket is local and mode 0600, is never exposed as a page object, and page JavaScript receives no JS++/native host bridge. Arbitrary JavaScript requested by an agent executes as page JavaScript subject to the page's normal WebKit security context; the authority to request that execution remains outside the page.
+
+The agent feature does not disable WebKit web-process isolation/sandboxing, same-origin rules, TLS handling or normal permission boundaries. Requests are bounded to 1 MiB and malformed/oversized RPC input fails explicitly. The security boundary here protects the user and trusted application from hostile websites; it is not intended to sandbox an agent the user has deliberately trusted with machine authority.
