@@ -218,10 +218,17 @@ promoted from preview to stable in that commit.
 Two items remain explicitly open and are documented as non-blocking ongoing
 evidence rather than release blockers: Cortex/Warden-direct dogfooding (the
 local Cortex API is authentication-gated; the generic coding-agent fallback
-was used) and sustained multi-day Wayland dogfooding. An out-of-memory page
-allocation can wedge a WebKit web process; Vantage bounds calls to a wedged
-tab with a 30-second timeout and other tabs remain responsive (WebKit
-behavior, not a Vantage interface defect).
+was used) and sustained multi-day Wayland dogfooding.
+
+WebKit web-process wedge behavior was investigated post-stable: an
+out-of-memory or pathological page evaluation can leave a tab's web process
+wedged; WebKitGTK's responsiveness probe does not flag such wedges, reload does
+not clear them, and terminate-based recovery proved unsafe on this build (see
+`docs/evidence/a17-native-certification.md`). Vantage therefore retains the
+bounded 30-second timeout as containment, exposes the `responsive` state and
+termination reason through `page.native_diagnostics`, and recovers genuinely
+dead web processes through detection plus `browser.reload`. No unsafe generic
+process-killing operation is exposed to agents.
 
 ## Documentation and website work throughout
 

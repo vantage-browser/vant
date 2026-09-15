@@ -197,6 +197,46 @@ workflows. Vantage itself contains no Cortex/Warden dependency.
 - Sustained multi-day dogfooding is ongoing-evidence work rather than a
   completed release gate.
 
+## Web-process wedge investigation (post-stable follow-up)
+
+WebKitGTK 6.0 exposes two official recovery primitives since 2.34:
+`webkit_web_view_get_is_web_process_responsive` and
+`webkit_web_view_terminate_web_process`. Both were investigated empirically
+against wedged processes; `page.native_diagnostics` now reports a
+`responsive` field derived from the former, and RPC timeout errors now echo
+the request id and method so an agent can correlate a bounded timeout to its
+own operation.
+
+Findings:
+
+1. **Responsiveness detection does not cover wedged JavaScript.** A tab whose
+   web process is stuck in a pathological evaluation (`while(true){}` or a
+   2 GiB `Uint8Array`) reports `responsive:true` continuously (polled for
+   40+ seconds). `get_is_web_process_responsive` reflects IPC/main-loop health,
+   not whether a single evaluation will ever return. The common agent accident
+   (stuck page JavaScript) is therefore not detectable through this API.
+2. **Reload alone does not recover a wedged evaluation.** `browser.reload`
+   posts a navigation to the same wedged process; the navigation queues behind
+   the stuck evaluation and the tab remains unusable.
+3. **Terminate-based recovery is not a clean supported path on this build.**
+   `webkit_web_view_terminate_web_process` followed by a reload crashed the
+   whole Vantage process once during testing (heap corruption,
+   `munmap_chunk(): invalid pointer`) in a memory-deadlocked process state,
+   and its triggering condition (`responsive == false`) is not reachable for
+   the common wedge anyway. Vantage therefore does not expose a terminate
+   operation to agents: it is unsafe, and the primitive is of little value
+   when detection cannot identify the affected tabs.
+4. **Genuine web-process crash recovery works through the existing API.** When
+   a web process actually dies (verified by `kill -9`), Vantage records the
+   termination in `page.native_diagnostics`, publishes
+   `page.web_process_terminated`, and a subsequent `browser.reload` respawns
+   the process and restores an interactive tab with its stable `tab_id`.
+
+Conclusion: the bounded 30-second RPC timeout remains Vantage's containment
+for wedged evaluations, and the clean supported recovery path for genuinely
+dead processes is termination detection plus `browser.reload`. No unsafe
+generic process-killing machinery was added.
+
 ## A17 decision
 
 All three promotion criteria were met: native WebKitGTK behavior is proven,
