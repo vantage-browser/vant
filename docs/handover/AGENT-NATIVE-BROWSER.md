@@ -89,12 +89,12 @@ Use a local Unix-domain socket under `$XDG_RUNTIME_DIR` by default with normal s
 - [x] Model asynchronous WebKit work asynchronously.
 
 ### A3 - window/tab/browser control
-- [ ] List/select/create/close windows and tabs.
-- [ ] Open/navigate/reload/stop/back/forward.
-- [ ] Focus/activate targets intentionally in the human-visible UI.
-- [ ] Add URI/title/loading and bounded wait primitives.
-- [ ] Route popups/new views through the normal Vantage model.
-- [ ] Verify human and agent actions interleave safely.
+- [x] List/select/create/close windows and tabs.
+- [x] Open/navigate/reload/stop/back/forward.
+- [x] Focus/activate targets intentionally in the human-visible UI.
+- [x] Add URI/title/loading and bounded wait primitives.
+- [x] Route popups/new views through the normal Vantage model.
+- [x] Verify human and agent actions interleave safely.
 
 ### A4 - arbitrary page JavaScript
 - [ ] Evaluate arbitrary JavaScript against an explicit tab/frame.

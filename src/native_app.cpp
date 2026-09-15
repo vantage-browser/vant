@@ -3193,6 +3193,29 @@ gboolean dispatch_agent_request(void *raw) {
     if (r.method == "status") { done(vantage::agent_ok(r.id, "{\"running\":true,\"socket\":" + vantage::json_string(vantage::agent_socket_path()) + "}")); return G_SOURCE_REMOVE; }
     if (r.method == "version") { done(vantage::agent_ok(r.id, "{\"protocol\":1,\"vantage\":" + vantage::json_string(vantage::version) + ",\"native\":" + vantage::json_string(vantage::native_versions()) + "}")); return G_SOURCE_REMOVE; }
     if (r.method == "capabilities") { done(vantage::agent_ok(r.id, agent_capabilities_json())); return G_SOURCE_REMOVE; }
+    if (r.method == "browser.windows") {
+        std::string out="["; bool first=true; for (auto &w:owner->windows) if(!w->closed){if(!first)out+=",";first=false;out+="{\"id\":"+std::to_string(w->id)+",\"private\":"+(w->private_mode?"true":"false")+",\"tabs\":"+std::to_string(w->tabs.size())+"}";} out+="]"; done(vantage::agent_ok(r.id,out)); return G_SOURCE_REMOVE;
+    }
+    if (r.method == "browser.tabs") {
+        std::string out="["; bool first=true; for(auto&w:owner->windows)for(auto&t:w->tabs){if(!first)out+=",";first=false;out+=agent_tab_json(t.get());}out+="]";done(vantage::agent_ok(r.id,out));return G_SOURCE_REMOVE;
+    }
+    if (r.method == "browser.window.new") {
+        const bool priv=vantage::json_param_bool(r.params_json,"private",false); const auto uri=vantage::json_param_string(r.params_json,"uri"); create_window(owner,uri.empty()?"vantage:new":uri,false,nullptr,priv); auto*w=owner->windows.back().get(); done(vantage::agent_ok(r.id,"{\"window_id\":"+std::to_string(w->id)+"}"));return G_SOURCE_REMOVE;
+    }
+    if (r.method == "browser.tab.new") {
+        auto *w=agent_window(owner,static_cast<vantage::WindowId>(vantage::json_param_integer(r.params_json,"window_id"))); if(!w){done(vantage::agent_error(r.id,"not_found","window not found"));return G_SOURCE_REMOVE;} auto uri=vantage::json_param_string(r.params_json,"uri"); auto*t=new_tab(w,uri.empty()?"vantage:new":uri);done(vantage::agent_ok(r.id,agent_tab_json(t)));return G_SOURCE_REMOVE;
+    }
+    if (r.method == "browser.tab.select") {
+        auto*t=agent_tab(owner,static_cast<vantage::TabId>(vantage::json_param_integer(r.params_json,"tab_id")));if(!t){done(vantage::agent_error(r.id,"not_found","tab not found"));return G_SOURCE_REMOVE;}select_tab(t);gtk_window_present(GTK_WINDOW(t->window->window));done(vantage::agent_ok(r.id,agent_tab_json(t)));return G_SOURCE_REMOVE;
+    }
+    if (r.method == "browser.tab.close") {
+        auto*t=agent_tab(owner,static_cast<vantage::TabId>(vantage::json_param_integer(r.params_json,"tab_id")));if(!t){done(vantage::agent_error(r.id,"not_found","tab not found"));return G_SOURCE_REMOVE;}close_tab(t);done(vantage::agent_ok(r.id,"true"));return G_SOURCE_REMOVE;
+    }
+    if (r.method == "browser.navigate" || r.method == "browser.reload" || r.method == "browser.stop" || r.method == "browser.back" || r.method == "browser.forward") {
+        auto*t=agent_tab(owner,static_cast<vantage::TabId>(vantage::json_param_integer(r.params_json,"tab_id")));if(!t){done(vantage::agent_error(r.id,"not_found","tab not found"));return G_SOURCE_REMOVE;}
+        if(r.method=="browser.navigate"){auto uri=vantage::json_param_string(r.params_json,"uri");if(uri.empty()){done(vantage::agent_error(r.id,"invalid_params","uri required"));return G_SOURCE_REMOVE;}auto resolved=t->window->policy.resolve(uri);load_decision(t,resolved);}else if(r.method=="browser.reload")webkit_web_view_reload(t->view);else if(r.method=="browser.stop")webkit_web_view_stop_loading(t->view);else if(r.method=="browser.back"&&webkit_web_view_can_go_back(t->view))webkit_web_view_go_back(t->view);else if(r.method=="browser.forward"&&webkit_web_view_can_go_forward(t->view))webkit_web_view_go_forward(t->view);
+        done(vantage::agent_ok(r.id,agent_tab_json(t)));return G_SOURCE_REMOVE;
+    }
     done(vantage::agent_error(r.id, "method_not_found", "unknown agent method"));
     return G_SOURCE_REMOVE;
 }
