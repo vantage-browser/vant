@@ -16,10 +16,16 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
+#include <fcntl.h>
 #include <thread>
 #include <unistd.h>
 namespace vantage {
 namespace {
+bool set_cloexec(int fd) {
+    const int flags = fcntl(fd, F_GETFD);
+    if (flags < 0 || fcntl(fd, F_SETFD, flags | FD_CLOEXEC) < 0) return false;
+    return true;
+}
 std::optional<std::string> field(std::string_view json, std::string_view key) {
     const std::string needle = "\"" + std::string(key) + "\"";
     auto p=json.find(needle); if(p==std::string_view::npos)return std::nullopt;
@@ -45,6 +51,18 @@ std::string json_string(std::string_view v){return "\""+json_escape(v)+"\"";}
 std::string json_param_string(std::string_view j,std::string_view k){auto v=field(j,k);return v?*v:"";}
 long long json_param_integer(std::string_view j,std::string_view k,long long f){auto v=field(j,k);if(!v)return f;try{return std::stoll(*v);}catch(...){return f;}}
 bool json_param_bool(std::string_view j,std::string_view k,bool f){auto v=field(j,k);if(!v)return f;return *v=="true"?true:*v=="false"?false:f;}
+char json_value_kind(std::string_view json,std::string_view key){
+    const std::string needle = "\"" + std::string(key) + "\"";
+    auto p=json.find(needle); if(p==std::string_view::npos) return '?';
+    p=json.find(':',p+needle.size()); if(p==std::string_view::npos) return '?'; ++p;
+    while(p<json.size()&&std::isspace(static_cast<unsigned char>(json[p])))++p;
+    if(p>=json.size()) return '?';
+    const char c=json[p];
+    if(c=='"') return 's';
+    if(c=='t'||c=='f') return 'b';
+    if(c=='-'||(c>='0'&&c<='9')) return 'n';
+    return '?';
+}
 std::string agent_ok(std::string_view id,std::string_view result){return "{\"version\":1,\"id\":"+json_string(id)+",\"ok\":true,\"result\":"+std::string(result)+"}";}
 std::string agent_error(std::string_view id,std::string_view code,std::string_view message){return "{\"version\":1,\"id\":"+json_string(id)+",\"ok\":false,\"error\":{\"code\":"+json_string(code)+",\"message\":"+json_string(message)+"}}";}
 AgentEventLog::AgentEventLog(std::size_t capacity):capacity_(std::max<std::size_t>(1,capacity)){}
@@ -60,10 +78,11 @@ const std::string &AgentRpcServer::path()const noexcept{return impl_->path;}
 bool AgentRpcServer::start(std::string *error){
     if(impl_->running)return true;
     ::unlink(impl_->path.c_str()); impl_->fd=::socket(AF_UNIX,SOCK_STREAM,0); if(impl_->fd<0){if(error)*error=std::strerror(errno);return false;}
+    if(!set_cloexec(impl_->fd)){if(error)*error="failed to set close-on-exec on agent socket";::close(impl_->fd);impl_->fd=-1;return false;}
     sockaddr_un a{};a.sun_family=AF_UNIX;if(impl_->path.size()>=sizeof a.sun_path){if(error)*error="socket path too long";::close(impl_->fd);impl_->fd=-1;return false;}std::strcpy(a.sun_path,impl_->path.c_str());
     if(::bind(impl_->fd,reinterpret_cast<sockaddr*>(&a),sizeof a)!=0||::chmod(impl_->path.c_str(),0600)!=0||::listen(impl_->fd,32)!=0){if(error)*error=std::strerror(errno);::close(impl_->fd);impl_->fd=-1;::unlink(impl_->path.c_str());return false;}
     impl_->running=true;
-    impl_->thread=std::thread([p=impl_.get()]{while(p->running){int c=::accept(p->fd,nullptr,nullptr);if(c<0){if(p->running)continue;break;}std::lock_guard guard(p->clients_mutex);p->clients.emplace_back([p,c]{std::string line;char ch;bool too_large=false;while(::recv(c,&ch,1,0)==1&&ch!='\n'){if(line.size()>=1024*1024){too_large=true;break;}line+=ch;}if(too_large){write_all(c,agent_error("","request_too_large","request exceeds 1 MiB limit")+"\n");::close(c);return;}AgentRequest r;if(!parse_request(line,r)){write_all(c,agent_error("","invalid_request","invalid JSON-RPC request")+"\n");::close(c);return;}std::mutex m;std::condition_variable cv;bool done=false;std::string reply;p->handler(std::move(r),[&](std::string x){{std::lock_guard lk(m);reply=std::move(x);done=true;}cv.notify_one();});{std::unique_lock lk(m);cv.wait_for(lk,std::chrono::seconds(30),[&]{return done;});}if(!done)reply=agent_error("","timeout","request timed out");write_all(c,reply+"\n");::close(c);});}});
+    impl_->thread=std::thread([p=impl_.get()]{while(p->running){int c=::accept(p->fd,nullptr,nullptr);if(c<0){if(p->running)continue;break;}set_cloexec(c);std::lock_guard guard(p->clients_mutex);p->clients.emplace_back([p,c]{std::string line;char ch;bool too_large=false;while(::recv(c,&ch,1,0)==1&&ch!='\n'){if(line.size()>=1024*1024){too_large=true;break;}line+=ch;}if(too_large){write_all(c,agent_error("","request_too_large","request exceeds 1 MiB limit")+"\n");::close(c);return;}AgentRequest r;if(!parse_request(line,r)){write_all(c,agent_error("","invalid_request","invalid JSON-RPC request")+"\n");::close(c);return;}std::mutex m;std::condition_variable cv;bool done=false;std::string reply;p->handler(std::move(r),[&](std::string x){{std::lock_guard lk(m);reply=std::move(x);done=true;}cv.notify_one();});{std::unique_lock lk(m);cv.wait_for(lk,std::chrono::seconds(30),[&]{return done;});}if(!done)reply=agent_error("","timeout","request timed out");write_all(c,reply+"\n");::close(c);});}});
     return true;
 }
 void AgentRpcServer::stop(){if(!impl_||!impl_->running.exchange(false))return;::shutdown(impl_->fd,SHUT_RDWR);::close(impl_->fd);impl_->fd=-1;if(impl_->thread.joinable())impl_->thread.join();{std::lock_guard guard(impl_->clients_mutex);for(auto &client:impl_->clients)if(client.joinable())client.join();impl_->clients.clear();}::unlink(impl_->path.c_str());}

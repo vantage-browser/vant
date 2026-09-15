@@ -114,6 +114,15 @@ smoke: $(BUILD)/vant
 smoke-native: $(BUILD)/vant
 	env WEBKIT_DISABLE_COMPOSITING_MODE=1 ./$(BUILD)/vant --native-smoke
 
+test-agent-native: $(BUILD)/vant
+	@command -v pkill >/dev/null 2>&1 || { echo "error: pkill required for test-agent-native"; exit 1; }
+	@echo "starting live Vantage for agent native regressions..."
+	@rm -f $$XDG_RUNTIME_DIR/vantage-agent-$$(id -u).sock 2>/dev/null || true
+	@( ./$(BUILD)/vant > /tmp/vantage-agent-native.log 2>&1 & echo $$! > /tmp/vantage-agent-native.pid )
+	@sleep 3
+	@python3 tests/agent_native.py || { pkill -x vant; exit 1; }
+	@pkill -x vant; true
+
 test: test-unit smoke
 
 test-sanitize: deps

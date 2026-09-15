@@ -186,10 +186,7 @@ void find_counted(WebKitFindController *, guint count, WindowState *state) {
 }
 
 std::string javascript_string(std::string_view value) {
-    auto *escaped = g_strescape(std::string(value).c_str(), nullptr);
-    std::string result = "\"" + std::string(escaped ? escaped : "") + "\"";
-    g_free(escaped);
-    return result;
+    return vantage::json_string(value);
 }
 
 struct FindEvaluation { WindowState *state{}; WebKitWebView *view{}; unsigned generation{}; };
@@ -1581,11 +1578,14 @@ void close_tab(TabState *tab) {
     if (tab->display_uri.starts_with("source:")) restore_uri = tab->display_uri.substr(7);
     else if (!tab->display_uri.empty()) restore_uri = tab->display_uri;
     else if (!tab->internal_uri.empty()) restore_uri = tab->internal_uri;
+    else if (!tab->pending_web_uri.empty()) restore_uri = tab->pending_web_uri;
     else if (const char *uri = webkit_web_view_get_uri(tab->view); uri && *uri) restore_uri = uri;
     if (restore_uri.empty() || restore_uri == "about:blank") restore_uri = "vantage:new";
     state->closed_tab_uris.push_back(std::move(restore_uri));
     constexpr std::size_t closed_tab_limit = 25;
     if (state->closed_tab_uris.size() > closed_tab_limit) state->closed_tab_uris.erase(state->closed_tab_uris.begin());
+    state->owner->agent_events.publish("tab.closed", "{\"tab_id\":" + std::to_string(tab->id) +
+        ",\"window_id\":" + std::to_string(state->id) + ",\"uri\":" + vantage::json_string(restore_uri) + "}");
     gtk_box_remove(GTK_BOX(state->tab_box), tab->tab);
     gtk_stack_remove(GTK_STACK(state->stack), tab->page);
     state->tabs.erase(found);
@@ -2334,6 +2334,8 @@ void refresh_download_chrome(ApplicationState *owner) {
 gboolean window_closing(GtkWindow *, WindowState *state) {
     clear_tab_drop_placeholder(state);
     state->closed = true;
+    state->owner->agent_events.publish("window.closed", "{\"window_id\":" + std::to_string(state->id) +
+        ",\"private\":" + (state->private_mode ? "true" : "false") + "}");
     return FALSE;
 }
 
@@ -2399,6 +2401,9 @@ void download_created_destination(WebKitDownload *download, const char *destinat
 
 void download_failed(WebKitDownload *, GError *error, DownloadContext *context) {
     context->failed = true;
+    context->owner->agent_events.publish("download.failed", "{\"uri\":" +
+        vantage::json_string(webkit_uri_request_get_uri(webkit_download_get_request(context->download)) ? webkit_uri_request_get_uri(webkit_download_get_request(context->download)) : "") +
+        ",\"message\":" + vantage::json_string(error && error->message ? error->message : "failed") + "}");
     if (!context->private_mode && context->record != 0 && !context->cancelled) {
         const std::string status = error && error->message ? "failed: " + std::string(error->message) : "failed";
         context->owner->data->update_download(context->record, status);
@@ -2422,6 +2427,9 @@ void download_finished(WebKitDownload *download, DownloadContext *context) {
         context->owner->data->update_download_progress(context->record, received, total);
         context->owner->data->update_download(context->record, "complete");
     }
+    context->owner->agent_events.publish("download.finished", "{\"uri\":" +
+        vantage::json_string(webkit_uri_request_get_uri(webkit_download_get_request(download)) ? webkit_uri_request_get_uri(webkit_download_get_request(download)) : "") +
+        ",\"destination\":" + vantage::json_string(context->destination) + "}");
     auto &active = context->owner->active_downloads;
     active.erase(std::remove(active.begin(), active.end(), context), active.end());
     refresh_download_chrome(context->owner);
@@ -2441,6 +2449,8 @@ void download_started(WebKitNetworkSession *, WebKitDownload *download, Applicat
     g_signal_connect(download, "failed", G_CALLBACK(download_failed), context);
     g_signal_connect(download, "received-data", G_CALLBACK(download_received), context);
     g_signal_connect(download, "finished", G_CALLBACK(download_finished), context);
+    owner->agent_events.publish("download.started", "{\"uri\":" +
+        vantage::json_string(webkit_uri_request_get_uri(webkit_download_get_request(download)) ? webkit_uri_request_get_uri(webkit_download_get_request(download)) : "") + "}");
 }
 
 GtkWidget *icon_button(const char *icon, const char *tooltip) {
@@ -2642,6 +2652,9 @@ TabState *new_tab(WindowState *state, const std::string &uri, bool load_initial)
         load_decision(tab, state->policy.resolve(uri));
         if (uri == "vantage:new" || uri.starts_with("about:")) g_idle_add(focus_address_deferred, state);
     }
+    state->owner->agent_events.publish("tab.created", "{\"tab_id\":" + std::to_string(tab->id) +
+        ",\"window_id\":" + std::to_string(state->id) + ",\"uri\":" +
+        vantage::json_string(webkit_web_view_get_uri(tab->view) ? webkit_web_view_get_uri(tab->view) : "") + "}");
     return tab;
 }
 
@@ -3172,6 +3185,8 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
         }
     }
     gtk_window_present(GTK_WINDOW(state->window));
+    owner->agent_events.publish("window.created", "{\"window_id\":" + std::to_string(state->id) +
+        ",\"private\":" + (state->private_mode ? "true" : "false") + "}");
     if (owner->fullscreen) gtk_window_fullscreen(GTK_WINDOW(state->window));
     if (tab && !state->app_mode && (initial_uri.starts_with("vantage:") || initial_uri.starts_with("about:"))) {
         gtk_widget_grab_focus(state->address);
@@ -3211,10 +3226,69 @@ std::string agent_tab_json(TabState *tab) {
         ",\"private\":" + (tab->window->private_mode ? "true" : "false") + "}";
 }
 std::string gobject_properties_json(GObject *object) {
-    if(!object)return "{}"; guint count=0;auto**specs=g_object_class_list_properties(G_OBJECT_GET_CLASS(object),&count);std::string out="{";bool first=true;
+    if (!object) return "{}";
+    guint count = 0;
+    auto **specs = g_object_class_list_properties(G_OBJECT_GET_CLASS(object), &count);
+    std::string out = "{";
+    bool first = true;
     for(guint i=0;i<count;++i){GValue v=G_VALUE_INIT;g_value_init(&v,specs[i]->value_type);g_object_get_property(object,specs[i]->name,&v);std::string value="null";if(G_VALUE_HOLDS_BOOLEAN(&v))value=g_value_get_boolean(&v)?"true":"false";else if(G_VALUE_HOLDS_STRING(&v))value=vantage::json_string(g_value_get_string(&v)?g_value_get_string(&v):"");else if(G_VALUE_HOLDS_INT(&v))value=std::to_string(g_value_get_int(&v));else if(G_VALUE_HOLDS_UINT(&v))value=std::to_string(g_value_get_uint(&v));else if(G_VALUE_HOLDS_INT64(&v))value=std::to_string(g_value_get_int64(&v));else if(G_VALUE_HOLDS_UINT64(&v))value=std::to_string(g_value_get_uint64(&v));else if(G_VALUE_HOLDS_DOUBLE(&v))value=std::to_string(g_value_get_double(&v));else if(G_VALUE_HOLDS_FLOAT(&v))value=std::to_string(g_value_get_float(&v));if(!first)out+=",";first=false;out+=vantage::json_string(specs[i]->name)+":"+value;g_value_unset(&v);}g_free(specs);return out+"}";
 }
-std::string webkit_describe_json(){return R"JSON({"webkit.webview":{"returns":"selected WebKitWebView readable GObject properties"},"webkit.settings":{"returns":"selected WebKitSettings readable GObject properties"},"webkit.network":{"returns":"selected WebKitNetworkSession readable GObject properties"},"webkit.setting.set":{"params":{"tab_id":"integer?","name":"string","value":"bool|string|number"},"effect":"sets a writable WebKitSettings property"},"page.javascript":{"params":{"tab_id":"integer?","script":"string"},"returns":"JSON-serialisable page value"}})JSON";}
+std::string agent_describe_json(const std::string &name) {
+    const std::vector<std::pair<std::string, std::string>> methods = {
+        {"status", "{\"params\":{},\"returns\":\"running state and agent socket path\"}"},
+        {"version", "{\"params\":{},\"returns\":\"protocol, Vantage and native runtime versions\"}"},
+        {"capabilities", "{\"params\":{},\"returns\":\"protocol stability, namespaces and feature list\"}"},
+        {"describe", "{\"params\":{\"name\":\"string?\"},\"returns\":\"method schema catalog, or one method when name is given\"}"},
+        {"browser.windows", "{\"params\":{},\"returns\":\"list of windows with id, private flag and tab count\"}"},
+        {"browser.tabs", "{\"params\":{},\"returns\":\"list of tabs with id, window_id, uri, title, loading and private flag\"}"},
+        {"browser.window.new", "{\"params\":{\"private\":\"boolean?\",\"uri\":\"string?\"},\"returns\":\"new window id\"}"},
+        {"browser.tab.new", "{\"params\":{\"window_id\":\"integer?\",\"uri\":\"string?\"},\"returns\":\"new tab object\"}"},
+        {"browser.tab.select", "{\"params\":{\"tab_id\":\"integer?\"},\"returns\":\"selected tab object\"}"},
+        {"browser.tab.close", "{\"params\":{\"tab_id\":\"integer?\"},\"returns\":\"true\"}"},
+        {"browser.navigate", "{\"params\":{\"tab_id\":\"integer?\",\"uri\":\"string\"},\"returns\":\"tab object\"}"},
+        {"browser.reload", "{\"params\":{\"tab_id\":\"integer?\"},\"returns\":\"tab object\"}"},
+        {"browser.stop", "{\"params\":{\"tab_id\":\"integer?\"},\"returns\":\"tab object\"}"},
+        {"browser.back", "{\"params\":{\"tab_id\":\"integer?\"},\"returns\":\"tab object\"}"},
+        {"browser.forward", "{\"params\":{\"tab_id\":\"integer?\"},\"returns\":\"tab object\"}"},
+        {"browser.cookies", "{\"params\":{\"tab_id\":\"integer?\",\"uri\":\"string?\"},\"returns\":\"cookie list scoped to the given or current URI\"}"},
+        {"browser.profile", "{\"params\":{\"tab_id\":\"integer?\"},\"returns\":\"private and persistence metadata for the tab profile\"}"},
+        {"page.javascript", "{\"params\":{\"tab_id\":\"integer?\",\"script\":\"string\"},\"returns\":\"JSON-serialisable page value\"}"},
+        {"page.snapshot", "{\"params\":{\"tab_id\":\"integer?\"},\"returns\":\"semantic element inventory with @e refs, generation and page metadata\"}"},
+        {"page.interact", "{\"params\":{\"tab_id\":\"integer?\",\"ref\":\"string?\",\"selector\":\"string?\",\"action\":\"click|focus|fill|type|clear|select|check|uncheck|scroll|key\",\"value\":\"string?\"},\"returns\":\"{ok:true} or {ok:false,error:stale_or_missing|disabled|hidden}\"}"},
+        {"page.wait", "{\"params\":{\"tab_id\":\"integer?\",\"text\":\"string?\",\"selector\":\"string?\",\"ref\":\"string?\",\"timeout_ms\":\"integer (0-30000)\"},\"returns\":\"true or timeout error\"}"},
+        {"page.inspect", "{\"params\":{\"tab_id\":\"integer?\",\"kind\":\"text|html|selection|metadata\"},\"returns\":\"page text, html, selection or metadata\"}"},
+        {"page.screenshot", "{\"params\":{\"tab_id\":\"integer?\",\"path\":\"string\",\"full_page\":\"boolean?\"},\"returns\":\"written PNG path\"}"},
+        {"page.diagnostics", "{\"params\":{\"tab_id\":\"integer?\"},\"returns\":\"bounded page console/error ring\"}"},
+        {"page.diagnostics.clear", "{\"params\":{\"tab_id\":\"integer?\"},\"returns\":\"cleared diagnostics ring\"}"},
+        {"page.native_diagnostics", "{\"params\":{\"tab_id\":\"integer?\"},\"returns\":\"last load error and web process termination\"}"},
+        {"webkit.webview", "{\"params\":{\"tab_id\":\"integer?\"},\"returns\":\"selected WebKitWebView readable GObject properties\"}"},
+        {"webkit.settings", "{\"params\":{\"tab_id\":\"integer?\"},\"returns\":\"selected WebKitSettings readable GObject properties\"}"},
+        {"webkit.network", "{\"params\":{\"tab_id\":\"integer?\"},\"returns\":\"selected WebKitNetworkSession readable GObject properties\"}"},
+        {"webkit.setting.set", "{\"params\":{\"tab_id\":\"integer?\",\"name\":\"string\",\"value\":\"bool|string|number\"},\"effect\":\"sets a writable WebKitSettings property\"}"},
+        {"downloads.list", "{\"params\":{},\"returns\":\"download records with id, uri, destination and status\"}"},
+        {"downloads.cancel", "{\"params\":{\"id\":\"integer\"},\"returns\":\"true\"}"},
+        {"downloads.remove", "{\"params\":{\"id\":\"integer\"},\"returns\":\"true\"}"},
+        {"bookmarks.list", "{\"params\":{},\"returns\":\"bookmark records\"}"},
+        {"bookmarks.add", "{\"params\":{\"uri\":\"string\",\"title\":\"string?\"},\"returns\":\"true\"}"},
+        {"bookmarks.remove", "{\"params\":{\"uri\":\"string\"},\"returns\":\"true\"}"},
+        {"history.list", "{\"params\":{},\"returns\":\"history records\"}"},
+        {"history.clear", "{\"params\":{},\"returns\":\"true\"}"},
+        {"permissions.list", "{\"params\":{},\"returns\":\"permission decisions\"}"},
+        {"permissions.set", "{\"params\":{\"origin\":\"string\",\"capability\":\"string\",\"decision\":\"allow|deny|ask\"},\"returns\":\"true\"}"},
+        {"events.since", "{\"params\":{\"after\":\"integer\",\"limit\":\"integer (1-1024)\"},\"returns\":\"latest sequence, dropped count and event list\"}"},
+        {"events.clear", "{\"params\":{},\"returns\":\"true\"}"},
+    };
+    std::string out = "{";
+    bool first = true;
+    for (const auto &method : methods) {
+        if (!name.empty() && method.first != name) continue;
+        if (!first) out += ",";
+        first = false;
+        out += vantage::json_string(method.first) + ":" + method.second;
+    }
+    out += "}";
+    return out;
+}
 
 std::string agent_capabilities_json() {
     return "{\"protocol\":1,\"stability\":\"preview\",\"namespaces\":[\"browser\",\"page\",\"webkit\",\"downloads\",\"bookmarks\",\"history\",\"permissions\",\"events\"],"
@@ -3235,7 +3309,24 @@ struct AgentCookiesResult { std::string id; vantage::AgentReply reply; };
 void agent_cookies_finished(GObject*source,GAsyncResult*result,void*raw){std::unique_ptr<AgentCookiesResult>state(static_cast<AgentCookiesResult*>(raw));GError*error=nullptr;auto*cookies=webkit_cookie_manager_get_cookies_finish(WEBKIT_COOKIE_MANAGER(source),result,&error);if(error){state->reply(vantage::agent_error(state->id,"cookie_error",error->message));g_error_free(error);return;}std::string out="[";bool first=true;for(auto*i=cookies;i;i=i->next){auto*c=static_cast<SoupCookie*>(i->data);if(!first)out+=",";first=false;out+="{\"name\":"+vantage::json_string(soup_cookie_get_name(c))+",\"value\":"+vantage::json_string(soup_cookie_get_value(c))+",\"domain\":"+vantage::json_string(soup_cookie_get_domain(c))+",\"path\":"+vantage::json_string(soup_cookie_get_path(c))+",\"secure\":"+(soup_cookie_get_secure(c)?"true":"false")+",\"http_only\":"+(soup_cookie_get_http_only(c)?"true":"false")+"}";}out+="]";g_list_free_full(cookies,[](gpointer v){soup_cookie_free(static_cast<SoupCookie*>(v));});state->reply(vantage::agent_ok(state->id,out));}
 
 struct AgentSnapshotResult { std::string id; vantage::AgentReply reply; std::string path; };
-void agent_snapshot_finished(GObject *source,GAsyncResult *result,void *raw){std::unique_ptr<AgentSnapshotResult> state(static_cast<AgentSnapshotResult*>(raw));GError*error=nullptr;auto*surface=webkit_web_view_get_snapshot_finish(WEBKIT_WEB_VIEW(source),result,&error);if(error||!surface){state->reply(vantage::agent_error(state->id,"screenshot_error",error&&error->message?error->message:"snapshot failed"));if(error)g_error_free(error);return;}const auto status=cairo_surface_write_to_png(surface,state->path.c_str());cairo_surface_destroy(surface);if(status!=CAIRO_STATUS_SUCCESS){state->reply(vantage::agent_error(state->id,"screenshot_error",cairo_status_to_string(status)));return;}state->reply(vantage::agent_ok(state->id,"{\"path\":"+vantage::json_string(state->path)+"}"));}
+void agent_snapshot_finished(GObject *source, GAsyncResult *result, void *raw) {
+    std::unique_ptr<AgentSnapshotResult> state(static_cast<AgentSnapshotResult *>(raw));
+    GError *error = nullptr;
+    auto *texture = webkit_web_view_get_snapshot_finish(WEBKIT_WEB_VIEW(source), result, &error);
+    if (error || !texture) {
+        state->reply(vantage::agent_error(state->id, "screenshot_error",
+            error && error->message ? error->message : "snapshot failed"));
+        if (error) g_error_free(error);
+        return;
+    }
+    const bool saved = gdk_texture_save_to_png(texture, state->path.c_str());
+    g_object_unref(texture);
+    if (!saved) {
+        state->reply(vantage::agent_error(state->id, "screenshot_error", "failed to write PNG"));
+        return;
+    }
+    state->reply(vantage::agent_ok(state->id, "{\"path\":" + vantage::json_string(state->path) + "}"));
+}
 
 struct AgentWaitState { WebKitWebView *view{}; std::string id; vantage::AgentReply reply; std::string script; gint64 deadline{}; };
 void agent_wait_check(AgentWaitState *state);
@@ -3258,12 +3349,12 @@ gboolean dispatch_agent_request(void *raw) {
     if (r.method == "permissions.set") {auto origin=vantage::json_param_string(r.params_json,"origin"),cap=vantage::json_param_string(r.params_json,"capability"),decision=vantage::json_param_string(r.params_json,"decision");auto value=decision=="allow"?vantage::Permission::allow:decision=="deny"?vantage::Permission::deny:vantage::Permission::ask;owner->data->set_permission(origin,cap,value);done(vantage::agent_ok(r.id,"true"));return G_SOURCE_REMOVE;}
     if (r.method == "browser.cookies") {auto*t=agent_tab(owner,static_cast<vantage::TabId>(vantage::json_param_integer(r.params_json,"tab_id")));if(!t){done(vantage::agent_error(r.id,"not_found","tab not found"));return G_SOURCE_REMOVE;}auto uri=vantage::json_param_string(r.params_json,"uri");if(uri.empty()){const char*u=webkit_web_view_get_uri(t->view);uri=u?u:"";}auto*manager=webkit_network_session_get_cookie_manager(webkit_web_view_get_network_session(t->view));webkit_cookie_manager_get_cookies(manager,uri.c_str(),nullptr,agent_cookies_finished,new AgentCookiesResult{r.id,std::move(done)});return G_SOURCE_REMOVE;}
     if (r.method == "browser.profile") {auto*t=agent_tab(owner,static_cast<vantage::TabId>(vantage::json_param_integer(r.params_json,"tab_id")));bool priv=t&&t->window->private_mode;done(vantage::agent_ok(r.id,"{\"private\":"+std::string(priv?"true":"false")+",\"persistent\":"+std::string(priv?"false":"true")+"}"));return G_SOURCE_REMOVE;}
-    if (r.method == "describe") { auto name=vantage::json_param_string(r.params_json,"name");done(vantage::agent_ok(r.id,name.empty()?webkit_describe_json():webkit_describe_json()));return G_SOURCE_REMOVE; }
+    if (r.method == "describe") { auto name=vantage::json_param_string(r.params_json,"name");done(vantage::agent_ok(r.id,agent_describe_json(name)));return G_SOURCE_REMOVE; }
     if (r.method == "webkit.webview" || r.method == "webkit.settings" || r.method == "webkit.network") {
         auto*t=agent_tab(owner,static_cast<vantage::TabId>(vantage::json_param_integer(r.params_json,"tab_id")));if(!t){done(vantage::agent_error(r.id,"not_found","tab not found"));return G_SOURCE_REMOVE;}GObject*object=nullptr;if(r.method=="webkit.webview")object=G_OBJECT(t->view);else if(r.method=="webkit.settings")object=G_OBJECT(webkit_web_view_get_settings(t->view));else object=G_OBJECT(t->window->private_session?t->window->private_session:owner->network_session);done(vantage::agent_ok(r.id,gobject_properties_json(object)));return G_SOURCE_REMOVE;
     }
     if (r.method == "webkit.setting.set") {
-        auto*t=agent_tab(owner,static_cast<vantage::TabId>(vantage::json_param_integer(r.params_json,"tab_id")));if(!t){done(vantage::agent_error(r.id,"not_found","tab not found"));return G_SOURCE_REMOVE;}auto name=vantage::json_param_string(r.params_json,"name");auto*settings=webkit_web_view_get_settings(t->view);auto*spec=g_object_class_find_property(G_OBJECT_GET_CLASS(settings),name.c_str());if(!spec||!(spec->flags&G_PARAM_WRITABLE)){done(vantage::agent_error(r.id,"invalid_property","unknown or read-only WebKit setting"));return G_SOURCE_REMOVE;}GValue v=G_VALUE_INIT;g_value_init(&v,spec->value_type);if(G_VALUE_HOLDS_BOOLEAN(&v))g_value_set_boolean(&v,vantage::json_param_bool(r.params_json,"value"));else if(G_VALUE_HOLDS_STRING(&v)){auto x=vantage::json_param_string(r.params_json,"value");g_value_set_string(&v,x.c_str());}else if(G_VALUE_HOLDS_INT(&v))g_value_set_int(&v,static_cast<int>(vantage::json_param_integer(r.params_json,"value")));else if(G_VALUE_HOLDS_UINT(&v))g_value_set_uint(&v,static_cast<unsigned>(vantage::json_param_integer(r.params_json,"value")));else{g_value_unset(&v);done(vantage::agent_error(r.id,"unsupported_property_type","setting type not supported by RPC v1"));return G_SOURCE_REMOVE;}g_object_set_property(G_OBJECT(settings),name.c_str(),&v);g_value_unset(&v);done(vantage::agent_ok(r.id,"true"));return G_SOURCE_REMOVE;
+        auto*t=agent_tab(owner,static_cast<vantage::TabId>(vantage::json_param_integer(r.params_json,"tab_id")));if(!t){done(vantage::agent_error(r.id,"not_found","tab not found"));return G_SOURCE_REMOVE;}auto name=vantage::json_param_string(r.params_json,"name");auto*settings=webkit_web_view_get_settings(t->view);auto*spec=g_object_class_find_property(G_OBJECT_GET_CLASS(settings),name.c_str());if(!spec||!(spec->flags&G_PARAM_WRITABLE)){done(vantage::agent_error(r.id,"invalid_property","unknown or read-only WebKit setting"));return G_SOURCE_REMOVE;}GValue v=G_VALUE_INIT;g_value_init(&v,spec->value_type);const char kind=vantage::json_value_kind(r.params_json,"value");if(G_VALUE_HOLDS_BOOLEAN(&v)){if(kind!='b'){g_value_unset(&v);done(vantage::agent_error(r.id,"invalid_param_type","value must be a JSON boolean for this WebKit setting"));return G_SOURCE_REMOVE;}g_value_set_boolean(&v,vantage::json_param_bool(r.params_json,"value"));}else if(G_VALUE_HOLDS_STRING(&v)){if(kind!='s'){g_value_unset(&v);done(vantage::agent_error(r.id,"invalid_param_type","value must be a JSON string for this WebKit setting"));return G_SOURCE_REMOVE;}auto x=vantage::json_param_string(r.params_json,"value");g_value_set_string(&v,x.c_str());}else if(G_VALUE_HOLDS_INT(&v)){if(kind!='n'){g_value_unset(&v);done(vantage::agent_error(r.id,"invalid_param_type","value must be a JSON number for this WebKit setting"));return G_SOURCE_REMOVE;}g_value_set_int(&v,static_cast<int>(vantage::json_param_integer(r.params_json,"value")));}else if(G_VALUE_HOLDS_UINT(&v)){if(kind!='n'){g_value_unset(&v);done(vantage::agent_error(r.id,"invalid_param_type","value must be a JSON number for this WebKit setting"));return G_SOURCE_REMOVE;}g_value_set_uint(&v,static_cast<unsigned>(vantage::json_param_integer(r.params_json,"value")));}else{g_value_unset(&v);done(vantage::agent_error(r.id,"unsupported_property_type","setting type not supported by RPC v1"));return G_SOURCE_REMOVE;}g_object_set_property(G_OBJECT(settings),name.c_str(),&v);g_value_unset(&v);done(vantage::agent_ok(r.id,"true"));return G_SOURCE_REMOVE;
     }
     if (r.method == "page.screenshot") {
         auto*t=agent_tab(owner,static_cast<vantage::TabId>(vantage::json_param_integer(r.params_json,"tab_id")));if(!t){done(vantage::agent_error(r.id,"not_found","tab not found"));return G_SOURCE_REMOVE;}auto path=vantage::json_param_string(r.params_json,"path");if(path.empty()){done(vantage::agent_error(r.id,"invalid_params","path required"));return G_SOURCE_REMOVE;}auto region=vantage::json_param_bool(r.params_json,"full_page",false)?WEBKIT_SNAPSHOT_REGION_FULL_DOCUMENT:WEBKIT_SNAPSHOT_REGION_VISIBLE;webkit_web_view_get_snapshot(t->view,region,WEBKIT_SNAPSHOT_OPTIONS_NONE,nullptr,agent_snapshot_finished,new AgentSnapshotResult{r.id,std::move(done),path});return G_SOURCE_REMOVE;
@@ -3275,7 +3366,7 @@ gboolean dispatch_agent_request(void *raw) {
         auto*t=agent_tab(owner,static_cast<vantage::TabId>(vantage::json_param_integer(r.params_json,"tab_id")));if(!t){done(vantage::agent_error(r.id,"not_found","tab not found"));return G_SOURCE_REMOVE;}auto action=vantage::json_param_string(r.params_json,"action");auto ref=vantage::json_param_string(r.params_json,"ref");auto selector=vantage::json_param_string(r.params_json,"selector");auto value=vantage::json_param_string(r.params_json,"value");
         std::string target=selector.empty()?"(window.__vantageAgentState&&window.__vantageAgentState.refs.get("+javascript_string(ref)+"))":"document.querySelector("+javascript_string(selector)+")";
         std::string op;if(action=="click")op="e.click()";else if(action=="focus")op="e.focus()";else if(action=="fill")op="e.focus();e.value="+javascript_string(value)+";e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}))";else if(action=="type")op="e.focus();e.value=(e.value||'')+"+javascript_string(value)+";e.dispatchEvent(new Event('input',{bubbles:true}))";else if(action=="clear")op="e.value='';e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}))";else if(action=="select")op="e.value="+javascript_string(value)+";e.dispatchEvent(new Event('change',{bubbles:true}))";else if(action=="check")op="e.checked=true;e.dispatchEvent(new Event('change',{bubbles:true}))";else if(action=="uncheck")op="e.checked=false;e.dispatchEvent(new Event('change',{bubbles:true}))";else if(action=="scroll")op="e.scrollIntoView({block:'center',inline:'nearest'})";else if(action=="key")op="e.focus();e.dispatchEvent(new KeyboardEvent('keydown',{key:"+javascript_string(value)+",bubbles:true}));e.dispatchEvent(new KeyboardEvent('keyup',{key:"+javascript_string(value)+",bubbles:true}))";else{done(vantage::agent_error(r.id,"invalid_params","unknown interaction action"));return G_SOURCE_REMOVE;}
-        const std::string script="(()=>{const e="+target+";if(!e)return {ok:false,error:'stale_or_missing'};if(e.disabled)return {ok:false,error:'disabled'};"+op+";return {ok:true}})()";const std::string wrapped="(()=>JSON.stringify(eval("+javascript_string(script)+")))()";webkit_web_view_evaluate_javascript(t->view,wrapped.c_str(),-1,nullptr,"vantage-agent://page.interact",nullptr,agent_javascript_finished,new AgentJavascriptResult{r.id,std::move(done)});return G_SOURCE_REMOVE;
+        const std::string script="(()=>{const e="+target+";if(!e)return {ok:false,error:'stale_or_missing'};if(e.disabled)return {ok:false,error:'disabled'};if(e.nodeType===1&&e.getClientRects().length===0)return {ok:false,error:'hidden'};"+op+";return {ok:true}})()";const std::string wrapped="(()=>JSON.stringify(eval("+javascript_string(script)+")))()";webkit_web_view_evaluate_javascript(t->view,wrapped.c_str(),-1,nullptr,"vantage-agent://page.interact",nullptr,agent_javascript_finished,new AgentJavascriptResult{r.id,std::move(done)});return G_SOURCE_REMOVE;
     }
     if (r.method == "page.wait") {
         auto*t=agent_tab(owner,static_cast<vantage::TabId>(vantage::json_param_integer(r.params_json,"tab_id")));if(!t){done(vantage::agent_error(r.id,"not_found","tab not found"));return G_SOURCE_REMOVE;}auto text=vantage::json_param_string(r.params_json,"text");auto selector=vantage::json_param_string(r.params_json,"selector");auto ref=vantage::json_param_string(r.params_json,"ref");std::string script;if(!selector.empty())script="!!document.querySelector("+javascript_string(selector)+")";else if(!ref.empty())script="!!(window.__vantageAgentState&&window.__vantageAgentState.refs.get("+javascript_string(ref)+"))";else script="document.body&&document.body.innerText.includes("+javascript_string(text)+")";auto timeout=std::clamp<long long>(vantage::json_param_integer(r.params_json,"timeout_ms",5000),0,30000);auto*state=new AgentWaitState{t->view,r.id,std::move(done),script,g_get_monotonic_time()+timeout*1000};agent_wait_check(state);return G_SOURCE_REMOVE;
@@ -3330,7 +3421,7 @@ gboolean dispatch_agent_request(void *raw) {
     }
     if (r.method == "browser.navigate" || r.method == "browser.reload" || r.method == "browser.stop" || r.method == "browser.back" || r.method == "browser.forward") {
         auto*t=agent_tab(owner,static_cast<vantage::TabId>(vantage::json_param_integer(r.params_json,"tab_id")));if(!t){done(vantage::agent_error(r.id,"not_found","tab not found"));return G_SOURCE_REMOVE;}
-        if(r.method=="browser.navigate"){auto uri=vantage::json_param_string(r.params_json,"uri");if(uri.empty()){done(vantage::agent_error(r.id,"invalid_params","uri required"));return G_SOURCE_REMOVE;}auto resolved=t->window->policy.resolve(uri);load_decision(t,resolved);}else if(r.method=="browser.reload")webkit_web_view_reload(t->view);else if(r.method=="browser.stop")webkit_web_view_stop_loading(t->view);else if(r.method=="browser.back"&&webkit_web_view_can_go_back(t->view))webkit_web_view_go_back(t->view);else if(r.method=="browser.forward"&&webkit_web_view_can_go_forward(t->view))webkit_web_view_go_forward(t->view);
+        if(r.method=="browser.navigate"){auto uri=vantage::json_param_string(r.params_json,"uri");if(uri.empty()){done(vantage::agent_error(r.id,"invalid_params","uri required"));return G_SOURCE_REMOVE;}auto resolved=t->window->policy.resolve(uri);if(resolved.kind==vantage::NavigationKind::rejected){done(vantage::agent_error(r.id,"navigation_rejected",resolved.reason.empty()?"scheme is not allowed":resolved.reason));return G_SOURCE_REMOVE;}if(resolved.kind==vantage::NavigationKind::external){done(vantage::agent_error(r.id,"navigation_external",resolved.reason.empty()?"requires external protocol handoff":resolved.reason));return G_SOURCE_REMOVE;}load_decision(t,resolved);}else if(r.method=="browser.reload")webkit_web_view_reload(t->view);else if(r.method=="browser.stop")webkit_web_view_stop_loading(t->view);else if(r.method=="browser.back"&&webkit_web_view_can_go_back(t->view))webkit_web_view_go_back(t->view);else if(r.method=="browser.forward"&&webkit_web_view_can_go_forward(t->view))webkit_web_view_go_forward(t->view);
         done(vantage::agent_ok(r.id,agent_tab_json(t)));return G_SOURCE_REMOVE;
     }
     done(vantage::agent_error(r.id, "method_not_found", "unknown agent method"));
