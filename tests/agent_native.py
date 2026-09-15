@@ -66,6 +66,11 @@ def main():
     require("tab.created" in types, "event stream contains tab.created")
     require("window.created" in types, "event stream contains window.created")
 
+    # native diagnostics expose the responsive field from WebKit's probe
+    diag = call("page.native_diagnostics", {"tab_id": tab})
+    require(diag.get("ok") and "responsive" in diag["result"],
+            "page.native_diagnostics reports responsive state")
+
     print("agent native regressions: PASS")
     return 0
 

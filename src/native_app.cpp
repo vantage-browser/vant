@@ -3393,7 +3393,8 @@ gboolean dispatch_agent_request(void *raw) {
     }
     if (r.method == "page.native_diagnostics") {
         auto*t=agent_tab(owner,static_cast<vantage::TabId>(vantage::json_param_integer(r.params_json,"tab_id")));if(!t){done(vantage::agent_error(r.id,"not_found","tab not found"));return G_SOURCE_REMOVE;}
-        const std::string out="{\"last_load_error\":"+vantage::json_string(t->last_load_error)+",\"last_web_process_termination\":"+vantage::json_string(t->last_web_process_termination)+"}";done(vantage::agent_ok(r.id,out));return G_SOURCE_REMOVE;
+        const bool responsive = webkit_web_view_get_is_web_process_responsive(t->view);
+        const std::string out="{\"last_load_error\":"+vantage::json_string(t->last_load_error)+",\"last_web_process_termination\":"+vantage::json_string(t->last_web_process_termination)+",\"responsive\":"+std::string(responsive?"true":"false")+"}";done(vantage::agent_ok(r.id,out));return G_SOURCE_REMOVE;
     }
     if (r.method == "page.javascript") {
         auto*t=agent_tab(owner,static_cast<vantage::TabId>(vantage::json_param_integer(r.params_json,"tab_id")));if(!t){done(vantage::agent_error(r.id,"not_found","tab not found"));return G_SOURCE_REMOVE;}

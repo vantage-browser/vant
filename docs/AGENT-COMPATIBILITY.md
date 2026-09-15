@@ -43,9 +43,13 @@ runtime-discovered.
 
 ## Known limitations that are not protocol blockers
 
-- An out-of-memory page allocation can wedge a WebKit web process; agent calls
-  to a wedged tab time out after 30 seconds rather than hanging indefinitely,
-  and other tabs remain responsive.
+- A pathological page evaluation (for example an out-of-memory allocation)
+  can wedge a WebKit web process; agent calls to a wedged tab time out after
+  30 seconds with an error that echoes the request id and method, and other
+  tabs remain responsive. WebKitGTK's responsiveness probe does not flag
+  wedged evaluations, so Vantage does not expose a terminate operation; a
+  genuinely dead web process is reported through `page.native_diagnostics`
+  and recovered by `browser.reload`.
 - Sustained multi-day dogfooding and Cortex/Warden-direct dogfooding remain
   ongoing-evidence work and are recorded as such in the certification
   evidence.

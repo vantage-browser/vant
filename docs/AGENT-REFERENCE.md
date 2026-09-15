@@ -55,7 +55,7 @@ Destructive operations are explicit RPC methods and return structured success/er
 
 ## A10 diagnostics
 
-`page.diagnostics` returns the bounded page-world console/error/unhandled-rejection ring for a tab. `page.diagnostics.clear` returns then clears it. `page.native_diagnostics` reports the last top-level load error and WebKit web-process termination observed by Vantage. The page recorder is injected by Vantage but deliberately exposes no native Vantage object to page JavaScript.
+`page.diagnostics` returns the bounded page-world console/error/unhandled-rejection ring for a tab. `page.diagnostics.clear` returns then clears it. `page.native_diagnostics` reports the last top-level load error, the last WebKit web-process termination, and the current `responsive` state of the tab's WebKit web process (from WebKitGTK's responsiveness probe; it reflects process IPC health, not whether an individual page evaluation will return). The page recorder is injected by Vantage but deliberately exposes no native Vantage object to page JavaScript.
 
 ```sh
 vant agent call page.diagnostics '{"tab_id":1}'
@@ -78,6 +78,8 @@ vant agent call events.clear '{}'
 ## A12 multiple controllers and races
 
 The RPC acceptor services clients independently, so one slow request does not serialize unrelated agent clients. WebKit mutations are still marshalled onto GTK's main context. Window/tab IDs and semantic refs fail explicitly after closure/invalidation; they are never rebound to a replacement object. Outstanding page operations can therefore complete, fail stale/not-found, or time out without retargeting another tab.
+
+A request that reaches the 30-second server timeout returns a `timeout` error that echoes the request id and names the method, so an agent can correlate the bounded failure to its own operation and decide whether to retry, reload or close the tab. When a WebKit web process genuinely dies, `page.native_diagnostics` reports the termination and `browser.reload` respawns it; a wedged evaluation that never returns is contained by the timeout rather than by a Vantage process-kill operation.
 
 ## A13 CLI contract
 
