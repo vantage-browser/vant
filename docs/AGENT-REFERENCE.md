@@ -112,3 +112,7 @@ An MCP adapter is intentionally optional and should translate MCP calls onto thi
 ## A15 security boundary
 
 RPC input is bounded to 1 MiB and the local socket is mode 0600. Vantage does not expose the RPC or native/JS++ host objects into web pages. Agent-requested page JavaScript remains page JavaScript; it does not become native application code. WebKit's origin, TLS, permission, web-process and sandbox boundaries remain intact.
+
+## A16 performance bounds
+
+Agent state is deliberately bounded: semantic snapshots return at most 500 interactive elements, page diagnostics retain 500 entries, the application event sequence retains 2,048 entries, and a single event read returns at most 1,024. The RPC acceptor sleeps while idle. See `docs/evidence/a16-agent-performance.md` for benchmark evidence and native-host certification caveats.

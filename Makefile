@@ -149,6 +149,13 @@ evidence: deps all
 $(BUILD)/benchmark_model: benchmarks/model.cpp $(CORE_OBJECTS) | deps
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(SQLITE_CFLAGS) $^ $(SQLITE_LIBS) -o $@
 
+
+$(BUILD)/benchmark_agent_rpc: benchmarks/agent_rpc.cpp $(BUILD)/agent_rpc.o | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $^ -pthread -o $@
+
+benchmark-agent: $(BUILD)/benchmark_agent_rpc
+	./$(BUILD)/benchmark_agent_rpc
+
 benchmark: $(BUILD)/benchmark_model
 	./$(BUILD)/benchmark_model
 

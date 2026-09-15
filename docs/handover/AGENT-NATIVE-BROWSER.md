@@ -191,11 +191,11 @@ Use a local Unix-domain socket under `$XDG_RUNTIME_DIR` by default with normal s
 - [x] Document clearly: this boundary protects the user from websites, not from their deliberately trusted local agent.
 
 ### A16 - performance and sustained use
-- [ ] Measure RPC overhead, snapshot latency/size and interaction latency.
-- [ ] Test large DOMs, many tabs, long event streams and repeated snapshots.
-- [ ] Require negligible idle cost when agent functionality is unused.
-- [ ] Bound retained diagnostic/event data.
-- [ ] Test long human browsing with the service idle and repeated agent-driven development loops.
+- [x] Measure RPC overhead, snapshot latency/size and interaction latency.
+- [x] Test large DOMs, many tabs, long event streams and repeated snapshots.
+- [x] Require negligible idle cost when agent functionality is unused.
+- [x] Bound retained diagnostic/event data.
+- [x] Test long human browsing with the service idle and repeated agent-driven development loops.
 
 ### A17 - release/compatibility contract
 - [ ] Freeze agent API v1 only after real workflows exercise it.
