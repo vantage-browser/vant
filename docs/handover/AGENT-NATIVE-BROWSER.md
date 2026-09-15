@@ -122,11 +122,11 @@ Use a local Unix-domain socket under `$XDG_RUNTIME_DIR` by default with normal s
 - [x] Keep arbitrary JS as the unrestricted escape hatch.
 
 ### A7 - rendered/content inspection
-- [ ] Add viewport/full-page screenshots where WebKitGTK permits reliable capture.
-- [ ] Add page text, selection, HTML/source and metadata extraction.
-- [ ] Expose viewport, scroll, zoom and find state.
-- [ ] Handle binary/file output without huge JSON blobs.
-- [ ] Support snapshot + screenshot verification workflows.
+- [x] Add viewport/full-page screenshots where WebKitGTK permits reliable capture.
+- [x] Add page text, selection, HTML/source and metadata extraction.
+- [x] Expose viewport, scroll, zoom and find state.
+- [x] Handle binary/file output without huge JSON blobs.
+- [x] Support snapshot + screenshot verification workflows.
 
 ### A8 - broad WebKit/Vantage introspection
 - [ ] Inventory useful WebKitGTK API families rather than exposing a brittle generic GObject ABI.

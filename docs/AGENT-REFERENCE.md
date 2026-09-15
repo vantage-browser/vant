@@ -34,3 +34,9 @@ The initial semantic extractor covers native interactive controls, ARIA-role ele
 ## Semantic interaction and waits
 
 `page.interact` accepts `action` plus either a semantic `ref` or CSS `selector`. Actions are `click`, `focus`, `fill`, `type`, `clear`, `select`, `check`, `uncheck`, `scroll`, and `key`. Ref lookup never falls back to a different element after invalidation. `page.wait` polls without blocking GTK/WebKit for a selector, current semantic ref, or visible body text, with `timeout_ms` bounded to 30 seconds.
+
+## Rendered and content inspection
+
+`page.screenshot` writes a PNG directly to a caller-selected filesystem path. `full_page:false` captures the visible WebKit region; `full_page:true` requests the full document through WebKit's snapshot API. Binary image data is never embedded in JSON.
+
+`page.inspect` supports `kind` values `text`, `html`, `selection`, and `metadata`. Metadata includes URL/title, viewport size, scroll position and document dimensions. Agents can combine semantic snapshots with rendered screenshots for verification.
