@@ -6,14 +6,18 @@ WebKitGTK renders untrusted web content. A pinned copy of JS++ provides a
 separate, capability-limited automation runtime and is never used to execute
 page JavaScript.
 
-Version 0.1.2 is the current development version following the 0.1.1 public
-preview; it is not a security-hardened release. The native shell currently
-provides tabs, navigation controls, persistent bookmarks,
-searchable history and downloads, private windows, printing, zoom controls and
-familiar Chromium-style keyboard shortcuts. Bookmarks can be added, edited and
-bulk-removed; history supports bulk removal; downloads expose live byte progress,
-recent activity, link copying and file-manager actions. Permission and automation
-models are not all connected to the native interface yet.
+Version 0.1.2 is the current release, building on the v0.1.1 public preview
+with a completed agent-native browser surface and native certification on the
+supported Linux/Wayland host. The native shell provides tabs, navigation
+controls, persistent bookmarks, searchable history and downloads, private
+windows, printing, zoom controls and familiar Chromium-style keyboard
+shortcuts. Bookmarks can be added, edited and bulk-removed; history supports
+bulk removal; downloads expose live byte progress, recent activity, link
+copying and file-manager actions. A trusted local agent can drive the same
+live Vantage windows and tabs through the stable v1 agent RPC: arbitrary page
+JavaScript, semantic snapshots and interaction, screenshots and content
+inspection, WebKit/Vantage introspection, browser data/services, diagnostics
+and event streaming.
 
 ## Install development dependencies
 
@@ -160,19 +164,21 @@ are maintained in [HANDOVER.md](HANDOVER.md). More focused notes live under
 
 ## Project status
 
-The first eight implementation checkpoints have established:
+Vantage v0.1.2 is a released development-line browser. The native GTK/WebKitGTK
+shell, fail-closed navigation policy, widget-independent tabs, SQLite session
+recovery, private in-memory profiles, bookmarks/permissions/downloads, the
+deterministic vendored JS++ snapshot and default-deny JS++ automation are
+implemented and tested. The agent-native browser campaign (A0-A17) is complete:
+a trusted local agent can operate the user's live browser through stable agent
+protocol 1, and the hostile-page security boundary, concurrency, performance
+and native WebKitGTK certification evidence are retained under
+[`docs/evidence/`](docs/evidence/).
 
-- a native GTK/WebKitGTK shell and fail-closed navigation policy;
-- widget-independent tabs and keyboard commands;
-- SQLite session recovery and private in-memory profiles;
-- bookmarks, per-origin permission decisions and safe download paths;
-- an initial lifecycle benchmark and tab-discard policy;
-- a deterministic vendored JS++ snapshot; and
-- default-deny JS++ automation capabilities.
-
-Real Wayland/Omarchy interaction testing, native tab binding, full daily-browser
-features, security review and release packaging remain future work. See the
-checkpoint evidence under [`docs/evidence/`](docs/evidence/) for exact limits.
+Remaining honest caveats: Vantage remains early Linux-first software rather
+than a drop-in Chromium replacement, WebKitGTK capability gaps (for example
+CDP-style response-body capture) are documented rather than emulated, and
+sustained multi-day Wayland dogfooding plus Cortex/Warden-direct dogfooding
+remain ongoing-evidence items recorded in the certification evidence.
 
 ## Licence
 

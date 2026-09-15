@@ -6,9 +6,10 @@ Ubuntu/Omarchy on Wayland. The product goal is a genuinely useful daily browser
 with a smaller operational footprint and a calmer interface than a general
 purpose Chromium distribution.
 
-Version 0.1.2 is the current development version following the 0.1.1 public
-preview. Only behavior backed by implemented code and retained evidence is
-shipped; broader support, security, compatibility and performance claims remain
+Version 0.1.2 is the current released version, following the 0.1.1 public
+preview and including the completed agent-native browser campaign (A0-A17).
+Only behavior backed by implemented code and retained evidence is shipped;
+broader support, security, compatibility and performance claims remain
 prohibited until their checkpoints are accepted.
 
 ## Product identity
@@ -54,6 +55,13 @@ documentation, CLI/RPC reference material and the public website synchronized as
 checkpoints land. Human-facing documentation should remain detailed and
 example-rich but reasonably digestible; agent-oriented reference pages may be
 deliberately exhaustive and machine-oriented.
+
+The A0-A17 campaign is **complete** as of v0.1.2 and agent protocol 1 is
+**stable**. See `docs/handover/AGENT-NATIVE-BROWSER.md`,
+`docs/AGENT-COMPATIBILITY.md` and
+`docs/evidence/a17-native-certification.md` for the frozen contract, native
+certification wall and the documented non-blocking evidence gaps
+(Cortex/Warden-direct dogfooding and sustained multi-day Wayland dogfooding).
 
 ## Vendored JS++ policy
 
