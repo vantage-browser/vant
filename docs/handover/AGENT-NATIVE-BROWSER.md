@@ -129,12 +129,12 @@ Use a local Unix-domain socket under `$XDG_RUNTIME_DIR` by default with normal s
 - [x] Support snapshot + screenshot verification workflows.
 
 ### A8 - broad WebKit/Vantage introspection
-- [ ] Inventory useful WebKitGTK API families rather than exposing a brittle generic GObject ABI.
-- [ ] Add discoverable namespaces for web view, settings, context, website data, navigation, permissions, media and related facilities.
-- [ ] Expose useful properties and operations systematically.
-- [ ] Add `describe`/schema introspection for args, returns and version availability.
-- [ ] Mark unsupported/version-specific WebKit functionality explicitly.
-- [ ] Keep semantic aliases for common operations.
+- [x] Inventory useful WebKitGTK API families rather than exposing a brittle generic GObject ABI.
+- [x] Add discoverable namespaces for web view, settings, context, website data, navigation, permissions, media and related facilities.
+- [x] Expose useful properties and operations systematically.
+- [x] Add `describe`/schema introspection for args, returns and version availability.
+- [x] Mark unsupported/version-specific WebKit functionality explicitly.
+- [x] Keep semantic aliases for common operations.
 
 ### A9 - browser-owned services and data
 - [ ] Expose downloads: list/inspect/wait/cancel/open/show-path and existing operations.

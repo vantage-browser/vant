@@ -40,3 +40,9 @@ The initial semantic extractor covers native interactive controls, ARIA-role ele
 `page.screenshot` writes a PNG directly to a caller-selected filesystem path. `full_page:false` captures the visible WebKit region; `full_page:true` requests the full document through WebKit's snapshot API. Binary image data is never embedded in JSON.
 
 `page.inspect` supports `kind` values `text`, `html`, `selection`, and `metadata`. Metadata includes URL/title, viewport size, scroll position and document dimensions. Agents can combine semantic snapshots with rendered screenshots for verification.
+
+## WebKit introspection
+
+`webkit.webview`, `webkit.settings`, and `webkit.network` expose the readable GObject properties of the selected Vantage-owned WebKit objects. This deliberately provides broad, version-sensitive introspection without pretending arbitrary C pointers can be serialised safely across RPC. `webkit.setting.set` can set writable boolean/string/integer WebKitSettings properties. `describe` documents stable Vantage methods; `capabilities` identifies available namespaces.
+
+Unknown properties and unsupported property types fail explicitly. Agents should discover properties on the installed WebKitGTK rather than assuming every distribution exposes the same version.
