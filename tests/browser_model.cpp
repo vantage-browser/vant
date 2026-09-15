@@ -46,4 +46,14 @@ int main() {
     assert(stress.tabs().empty());
     for (int i = 0; i < 25; ++i) assert(stress.reopen_closed());
     assert(!stress.reopen_closed());
+
+    vantage::BrowserModel ids;
+    const auto id_first = ids.new_tab("https://one.example");
+    const auto id_second = ids.new_tab("https://two.example");
+    assert(id_first != id_second);
+    assert(ids.close_tab(id_first));
+    assert(ids.find(id_first) == nullptr);
+    const auto reopened = ids.reopen_closed();
+    assert(reopened && *reopened != id_first && *reopened != id_second);
+    assert(ids.find(*reopened)->lifecycle == vantage::TabLifecycle::live);
 }

@@ -74,11 +74,11 @@ Use a local Unix-domain socket under `$XDG_RUNTIME_DIR` by default with normal s
 - [x] Freeze existing human behavior with regression tests.
 
 ### A1 - stable live-object identities
-- [ ] Give windows/tabs stable runtime IDs independent of GTK pointers and visible indices.
-- [ ] Define deterministic current-window/current-tab semantics.
-- [ ] Expose URI/title/load/private/audio/lifecycle metadata.
-- [ ] Prevent closed IDs from silently retargeting new objects.
-- [ ] Test create/reorder/move/close/restore/multi-window lifecycle.
+- [x] Give windows/tabs stable runtime IDs independent of GTK pointers and visible indices.
+- [x] Define deterministic current-window/current-tab semantics.
+- [x] Expose URI/title/load/private/audio/lifecycle metadata.
+- [x] Prevent closed IDs from silently retargeting new objects.
+- [x] Test create/reorder/move/close/restore/multi-window lifecycle.
 
 ### A2 - versioned local RPC
 - [ ] Add a Vantage-owned Unix-domain-socket RPC service.

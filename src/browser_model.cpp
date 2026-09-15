@@ -12,7 +12,7 @@ BrowserModel::BrowserModel(std::string workspace, std::size_t closed_limit)
 }
 
 TabId BrowserModel::new_tab(std::string uri, bool activate_tab) {
-    Tab tab{next_id_++, std::move(uri), "New tab", false, false};
+    Tab tab{next_id_++, std::move(uri), "New tab", false, false, false, false, TabLifecycle::live};
     tabs_.push_back(std::move(tab));
     if (activate_tab) active_ = tabs_.back().id;
     return tabs_.back().id;
@@ -55,7 +55,9 @@ bool BrowserModel::close_tab(TabId id) {
     if (it == tabs_.end()) return false;
     const auto index = static_cast<std::size_t>(it - tabs_.begin());
     if (closed_limit_ > 0) {
-        closed_.push_back(*it);
+        auto closed = *it;
+        closed.lifecycle = TabLifecycle::closed;
+        closed_.push_back(std::move(closed));
         if (closed_.size() > closed_limit_) closed_.erase(closed_.begin());
     }
     tabs_.erase(it);
@@ -72,6 +74,7 @@ std::optional<TabId> BrowserModel::reopen_closed() {
     closed_.pop_back();
     tab.id = next_id_++;
     tab.loading = false;
+    tab.lifecycle = TabLifecycle::live;
     tabs_.push_back(std::move(tab));
     active_ = tabs_.back().id;
     return active_;

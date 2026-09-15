@@ -1,6 +1,7 @@
 #include "native_app.h"
 
 #include "navigation.h"
+#include "browser_model.h"
 #include "preferences.h"
 #include "user_data.h"
 
@@ -28,6 +29,7 @@ struct ApplicationState;
 struct DownloadContext;
 
 struct TabState {
+    vantage::TabId id{};
     WindowState *window{};
     GtkWidget *page{};
     WebKitWebView *view{};
@@ -49,6 +51,7 @@ struct TabState {
 };
 
 struct WindowState {
+    vantage::WindowId id{};
     ApplicationState *owner{};
     GtkApplication *application{};
     GtkWidget *window{};
@@ -118,6 +121,8 @@ struct WindowState {
 
 struct ApplicationState {
     GtkApplication *application{};
+    vantage::WindowId next_window_id{1};
+    vantage::TabId next_tab_id{1};
     std::string initial_uri;
     bool smoke{};
     bool fullscreen{};
@@ -2499,6 +2504,7 @@ TabState *new_tab(WindowState *state, const std::string &uri, bool load_initial)
     }
     auto owned = std::make_unique<TabState>();
     auto *tab = owned.get();
+    tab->id = state->owner->next_tab_id++;
     tab->window = state;
     tab->view = state->private_session
         ? WEBKIT_WEB_VIEW(g_object_new(WEBKIT_TYPE_WEB_VIEW, "network-session", state->private_session, nullptr))
@@ -2813,6 +2819,7 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
                    WindowState *source, bool private_mode, bool create_initial_tab) {
     auto owned_state = std::make_unique<WindowState>();
     auto *state = owned_state.get();
+    state->id = owner->next_window_id++;
     state->owner = owner;
     state->application = owner->application;
     state->smoke = smoke;

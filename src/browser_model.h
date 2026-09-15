@@ -9,7 +9,9 @@
 
 namespace vantage {
 
+using WindowId = std::uint64_t;
 using TabId = std::uint64_t;
+enum class TabLifecycle { live, closed };
 enum class FocusTarget { page, address, command_palette };
 
 struct Tab {
@@ -18,6 +20,9 @@ struct Tab {
     std::string title;
     bool loading{false};
     bool discarded{false};
+    bool private_mode{false};
+    bool audible{false};
+    TabLifecycle lifecycle{TabLifecycle::live};
 };
 
 class BrowserModel {
