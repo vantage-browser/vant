@@ -175,11 +175,11 @@ Use a local Unix-domain socket under `$XDG_RUNTIME_DIR` by default with normal s
 - [x] Ensure `--help`, `capabilities` and `describe` let an unfamiliar agent teach itself the API.
 
 ### A14 - direct integrations without coupling
-- [ ] Document RPC for non-CLI clients.
-- [ ] Add a reference client only if useful; RPC remains authoritative.
-- [ ] Evaluate MCP as an optional adapter over the same RPC.
-- [ ] Validate Cortex/Warden while keeping Vantage independent of Gantry.
-- [ ] Validate at least one unrelated coding-agent workflow.
+- [x] Document RPC for non-CLI clients.
+- [x] Add a reference client only if useful; RPC remains authoritative.
+- [x] Evaluate MCP as an optional adapter over the same RPC.
+- [x] Validate Cortex/Warden while keeping Vantage independent of Gantry.
+- [x] Validate at least one unrelated coding-agent workflow.
 
 ### A15 - security-boundary certification
 - [ ] Verify WebKit web-process sandboxing remains enabled.

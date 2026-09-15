@@ -97,3 +97,14 @@ vant agent js --file script.js
 ```
 
 `call` remains the universal escape hatch. `capabilities` and `describe` are authoritative for runtime discovery.
+
+## A14 direct clients and adapters
+
+The Unix RPC is authoritative; the CLI is only one client. `tools/vant_agent.py` is a dependency-free reference implementation showing the complete framing needed by any agent/runtime. Vantage contains no Cortex/Warden dependency: Gantry agents can use the shell CLI or RPC exactly like any unrelated coding agent.
+
+```sh
+python3 tools/vant_agent.py browser.tabs '{}'
+python3 tools/vant_agent.py page.snapshot '{"tab_id":1}'
+```
+
+An MCP adapter is intentionally optional and should translate MCP calls onto this same RPC rather than becoming a second browser-control implementation. This keeps Vantage equally usable from Cortex, Warden, Codex, Claude Code, OpenCode, shell scripts and custom agents.
