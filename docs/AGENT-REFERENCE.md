@@ -17,7 +17,7 @@ The API is self-describing through `capabilities`; later checkpoints extend name
 
 The browser namespace targets stable numeric `window_id` and `tab_id` handles. Closing a tab invalidates its handle; IDs are never reused during a Vantage process lifetime.
 
-Methods: `browser.windows`, `browser.tabs`, `browser.window.new`, `browser.tab.new`, `browser.tab.select`, `browser.tab.close`, `browser.navigate`, `browser.reload`, `browser.stop`, `browser.back`, `browser.forward`. Omit `tab_id` to target the current live tab. Selecting a tab also selects/presents it in the normal human-visible Vantage UI.
+Methods: `browser.windows`, `browser.tabs`, `browser.window.new`, `browser.tab.new`, `browser.tab.select`, `browser.tab.close`, `browser.navigate`, `browser.reload`, `browser.stop`, `browser.back`, `browser.forward`. Omit `tab_id` to target the current live tab. Selecting a tab also selects/presents it in the normal human-visible Vantage UI. `browser.navigate` applies the normal navigation policy: rejected schemes (including `file:`, `javascript:`, `data:` and unknown schemes) return `navigation_rejected`, and external-protocol handoffs return `navigation_external`, instead of silently doing nothing.
 
 ## Arbitrary page JavaScript
 
@@ -33,7 +33,7 @@ The initial semantic extractor covers native interactive controls, ARIA-role ele
 
 ## Semantic interaction and waits
 
-`page.interact` accepts `action` plus either a semantic `ref` or CSS `selector`. Actions are `click`, `focus`, `fill`, `type`, `clear`, `select`, `check`, `uncheck`, `scroll`, and `key`. Ref lookup never falls back to a different element after invalidation. `page.wait` polls without blocking GTK/WebKit for a selector, current semantic ref, or visible body text, with `timeout_ms` bounded to 30 seconds.
+`page.interact` accepts `action` plus either a semantic `ref` or CSS `selector`. Actions are `click`, `focus`, `fill`, `type`, `clear`, `select`, `check`, `uncheck`, `scroll`, and `key`. Ref lookup never falls back to a different element after invalidation. Interactions return `{ok:true}` or `{ok:false,error:stale_or_missing|disabled|hidden}`; hidden refers to an element that renders no box (for example `display:none`). `page.wait` polls without blocking GTK/WebKit for a selector, current semantic ref, or visible body text, with `timeout_ms` bounded to 30 seconds.
 
 ## Rendered and content inspection
 
@@ -119,4 +119,8 @@ Agent state is deliberately bounded: semantic snapshots return at most 500 inter
 
 ## A17 compatibility and release status
 
-Protocol number 1 is currently **preview**, not frozen stable v1. Always inspect `capabilities` and `describe`. See `docs/AGENT-COMPATIBILITY.md` for compatibility rules and WebKitGTK-dependent gaps. Stable-v1 declaration is intentionally blocked on native Linux/Wayland dogfooding rather than inferred from UI-independent tests.
+Protocol 1 is **stable v1** as of the A17 native certification commit. See
+`docs/AGENT-COMPATIBILITY.md` for the frozen compatibility rules, the
+preview-period corrections folded into v1, and WebKitGTK-dependent gaps. The
+stability promotion is based on the native certification wall in
+`docs/evidence/a17-native-certification.md`.

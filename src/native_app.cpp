@@ -3291,7 +3291,7 @@ std::string agent_describe_json(const std::string &name) {
 }
 
 std::string agent_capabilities_json() {
-    return "{\"protocol\":1,\"stability\":\"preview\",\"namespaces\":[\"browser\",\"page\",\"webkit\",\"downloads\",\"bookmarks\",\"history\",\"permissions\",\"events\"],"
+    return "{\"protocol\":1,\"stability\":\"stable\",\"namespaces\":[\"browser\",\"page\",\"webkit\",\"downloads\",\"bookmarks\",\"history\",\"permissions\",\"events\"],"
            "\"features\":[\"live-session\",\"stable-ids\",\"javascript\",\"semantic-snapshot\",\"semantic-interaction\",\"content-inspection\",\"webkit-introspection\",\"browser-data\",\"diagnostics\",\"event-sequence\",\"multi-controller\"]}";
 }
 

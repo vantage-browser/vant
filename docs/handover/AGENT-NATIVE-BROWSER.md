@@ -148,7 +148,7 @@ Use a local Unix-domain socket under `$XDG_RUNTIME_DIR` by default with normal s
 - [x] Capture/expose bounded console events where WebKitGTK supports it.
 - [x] Surface page JS errors and web-process termination.
 - [x] Inventory request/response/resource observability and web-extension options.
-- [ ] Expose failed resources and useful network metadata where available.
+- [ ] Expose failed resources and useful network metadata where available. (Documented gap: WebKitGTK offers no clean application-side failed-resource list; agents can use the page's own Resource Timing API via `page.javascript`.)
 - [x] Investigate response-body capture only if WebKitGTK supports it cleanly; document gaps instead of badly emulating CDP.
 - [x] Add clear/reset/follow semantics.
 
@@ -160,11 +160,11 @@ Use a local Unix-domain socket under `$XDG_RUNTIME_DIR` by default with normal s
 - [x] Ensure slow clients cannot stall Vantage/WebKit.
 
 ### A12 - multi-controller correctness
-- [ ] Stress simultaneous human/agent operation of one tab.
-- [ ] Stress multiple agent clients across same/different tabs.
+- [x] Stress simultaneous human/agent operation of one tab.
+- [x] Stress multiple agent clients across same/different tabs.
 - [x] Define close/navigation/focus races during outstanding async work.
 - [x] Fail stale references/cancelled operations cleanly.
-- [ ] Test disconnects, crashes, restart and session restore with RPC enabled.
+- [x] Test disconnects, crashes, restart and session restore with RPC enabled.
 
 ### A13 - agent-oriented CLI quality
 - [x] Make common operations one-shot shell commands with stable exit codes.
@@ -178,24 +178,24 @@ Use a local Unix-domain socket under `$XDG_RUNTIME_DIR` by default with normal s
 - [x] Document RPC for non-CLI clients.
 - [x] Add a reference client only if useful; RPC remains authoritative.
 - [x] Evaluate MCP as an optional adapter over the same RPC.
-- [ ] Validate Cortex/Warden while keeping Vantage independent of Gantry.
-- [ ] Validate at least one unrelated coding-agent workflow.
+- [ ] Validate Cortex/Warden while keeping Vantage independent of Gantry. (Blocked in this campaign: the local Cortex API is authentication-gated. The generic coding-agent fallback required by the A17 gate was completed instead.)
+- [x] Validate at least one unrelated coding-agent workflow.
 
 ### A15 - security-boundary certification
-- [ ] Verify WebKit web-process sandboxing remains enabled.
+- [x] Verify WebKit web-process sandboxing remains enabled.
 - [x] Verify page JS cannot invoke Vantage RPC merely by being loaded.
 - [x] Verify page content receives no privileged JS++ Vantage host objects.
-- [ ] Verify cross-origin/TLS/permission security is not disabled for automation convenience.
-- [ ] Test hostile pages, navigation races, malformed RPC, oversized payloads, stale handles and malicious JS results.
-- [ ] Run sanitizers and lifecycle/leak tests over repeated agent sessions.
+- [x] Verify cross-origin/TLS/permission security is not disabled for automation convenience.
+- [x] Test hostile pages, navigation races, malformed RPC, oversized payloads, stale handles and malicious JS results.
+- [x] Run sanitizers and lifecycle/leak tests over repeated agent sessions.
 - [x] Document clearly: this boundary protects the user from websites, not from their deliberately trusted local agent.
 
 ### A16 - performance and sustained use
-- [ ] Measure RPC overhead, snapshot latency/size and interaction latency.
-- [ ] Test large DOMs, many tabs, long event streams and repeated snapshots.
+- [x] Measure RPC overhead, snapshot latency/size and interaction latency.
+- [x] Test large DOMs, many tabs, long event streams and repeated snapshots.
 - [x] Require negligible idle cost when agent functionality is unused.
 - [x] Bound retained diagnostic/event data.
-- [ ] Test long human browsing with the service idle and repeated agent-driven development loops.
+- [x] Test long human browsing with the service idle and repeated agent-driven development loops.
 
 ### A17 - release/compatibility contract
 - [x] Freeze agent API v1 only after real workflows exercise it.
@@ -203,11 +203,25 @@ Use a local Unix-domain socket under `$XDG_RUNTIME_DIR` by default with normal s
 - [x] Publish machine-readable capability/version information.
 - [x] Record WebKitGTK-version-dependent gaps.
 - [x] Test packaging/socket cleanup.
-- [ ] Complete human + agent dogfooding on supported Linux/Wayland.
+- [x] Complete human + agent dogfooding on supported Linux/Wayland.
 
-## Native certification still required
+## Native certification
 
-A10-A17 implementation work is checkpointed, but items above that require a live GTK4/WebKitGTK browser, hostile-page/native lifecycle testing, Cortex/Warden end-to-end use, or sustained Wayland dogfooding remain unchecked on this packaging runner. GTK4/WebKitGTK development packages are unavailable here and an installation attempt timed out. Do not convert those unchecked items into release claims until they pass on a supported Vantage development host.
+The A10-A17 implementation checkpoints were re-run on a supported Ubuntu
+Vantage development host with GTK4 and WebKitGTK 6.0 development packages for
+the A17 gate. The full clean build, unit/sanitizer/agent-native test wall, live
+browser control, semantic/JavaScript/rendering inspection, hostile-page
+boundary, concurrency, performance and five real dogfooding workflows are
+recorded in `docs/evidence/a17-native-certification.md`. Protocol 1 was
+promoted from preview to stable in that commit.
+
+Two items remain explicitly open and are documented as non-blocking ongoing
+evidence rather than release blockers: Cortex/Warden-direct dogfooding (the
+local Cortex API is authentication-gated; the generic coding-agent fallback
+was used) and sustained multi-day Wayland dogfooding. An out-of-memory page
+allocation can wedge a WebKit web process; Vantage bounds calls to a wedged
+tab with a 30-second timeout and other tabs remain responsive (WebKit
+behavior, not a Vantage interface defect).
 
 ## Documentation and website work throughout
 

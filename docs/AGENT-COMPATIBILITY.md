@@ -2,14 +2,50 @@
 
 ## Current status
 
-The wire protocol number is `1`, but the agent API is **preview**, not frozen stable v1. `capabilities` reports `stability: "preview"`. The A17 rule is intentionally that the API must not be declared stable until native WebKitGTK/Wayland dogfooding exercises real workflows on a supported development host.
+The wire protocol number is `1` and the agent API is **stable v1** as of the
+A17 native certification commit (2026-09-15), based on the completed native
+certification wall in `docs/evidence/a17-native-certification.md`.
 
-Within preview protocol 1, integrations should call `capabilities` and `describe` and tolerate additive methods/fields. Once v1 is frozen, additive optional fields/methods remain compatible; removals, semantic retargeting, required-field changes and incompatible result changes require a new protocol version or a documented deprecation window.
+`capabilities` reports `stability: "stable"`.
+
+Within stable protocol 1, integrations should call `capabilities` and
+`describe` and tolerate additive methods/fields. Additive optional
+fields/methods remain compatible; removals, semantic retargeting,
+required-field changes and incompatible result changes require a new protocol
+version or a documented deprecation window.
+
+## Correction history during preview
+
+The following behaviors were corrected while protocol 1 was still preview and
+are now part of the frozen v1 contract:
+
+- `page.interact` on a hidden (unrendered) element returns `{ok:false,
+  error:"hidden"}` instead of silently acting.
+- `browser.navigate` to a rejected scheme returns `navigation_rejected`, and
+  to an external-protocol handoff returns `navigation_external`, instead of a
+  silent no-op success.
+- `webkit.setting.set` rejects JSON type mismatches with `invalid_param_type`
+  instead of silently coercing values (for example a string into a boolean
+  setting).
+- `describe` returns a complete method catalog and honors the `name`
+  parameter.
+- The agent event sequence includes tab/window lifecycle and download events.
+- The agent Unix socket is close-on-exec so WebKit web processes never inherit
+  it.
 
 ## WebKit-dependent gaps
 
-Vantage exposes what WebKitGTK can support cleanly. It does not emulate Chromium CDP merely for surface parity. In particular, arbitrary response-body capture is not currently claimed. Property availability under `webkit.*` depends on the installed WebKitGTK/GObject version and must be runtime-discovered.
+Vantage exposes what WebKitGTK can support cleanly. It does not emulate
+Chromium CDP merely for surface parity. In particular, arbitrary response-body
+capture is not currently claimed. Property availability under `webkit.*`
+depends on the installed WebKitGTK/GObject version and must be
+runtime-discovered.
 
-## Release gate still required
+## Known limitations that are not protocol blockers
 
-Before changing `stability` to `stable`, run the complete native build/test/sanitizer wall on a supported Linux/Wayland host with GTK4 and WebKitGTK 6.0 development packages, then dogfood shared human+agent browsing, diagnostics, events, multiple controllers, private mode, browser data and repeated development loops. The packaging runner used for A10-A17 could not complete this native gate because installing those development packages timed out.
+- An out-of-memory page allocation can wedge a WebKit web process; agent calls
+  to a wedged tab time out after 30 seconds rather than hanging indefinitely,
+  and other tabs remain responsive.
+- Sustained multi-day dogfooding and Cortex/Warden-direct dogfooding remain
+  ongoing-evidence work and are recorded as such in the certification
+  evidence.
