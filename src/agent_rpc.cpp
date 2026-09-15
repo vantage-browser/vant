@@ -68,12 +68,18 @@ bool AgentRpcServer::start(std::string *error){
 }
 void AgentRpcServer::stop(){if(!impl_||!impl_->running.exchange(false))return;::shutdown(impl_->fd,SHUT_RDWR);::close(impl_->fd);impl_->fd=-1;if(impl_->thread.joinable())impl_->thread.join();{std::lock_guard guard(impl_->clients_mutex);for(auto &client:impl_->clients)if(client.joinable())client.join();impl_->clients.clear();}::unlink(impl_->path.c_str());}
 int run_agent_cli(const std::vector<std::string_view>&input){
-    if(input.empty()){std::cerr<<"usage: vant agent [--json] <status|version|capabilities|tabs|open|snapshot|click|fill|diagnostics|events|call|js> ...\n";return 2;}
+    if(input.empty()){std::cerr<<"usage: vant agent [--json] <status|version|capabilities|tabs|open|snapshot|click|fill|diagnostics|events|watch|call|js> ...\n";return 2;}
     std::vector<std::string_view> a=input; bool json_output=false;
     if(!a.empty()&&a[0]=="--json"){json_output=true;a.erase(a.begin());}
     if(a.empty())return 2;
+    if(a[0]=="--help"||a[0]=="help"){std::cout<<"vant agent [--json] status|version|capabilities|tabs|open URI [TAB]|snapshot [TAB]|click REF [TAB]|fill REF VALUE [TAB]|diagnostics [TAB]|events|watch|call METHOD [JSON]|js [--file FILE|-|SCRIPT]\n";return 0;}
+    auto exchange=[](std::string_view method,std::string_view params)->std::optional<std::string>{int fd=::socket(AF_UNIX,SOCK_STREAM,0);sockaddr_un u{};u.sun_family=AF_UNIX;auto path=agent_socket_path();std::strcpy(u.sun_path,path.c_str());if(fd<0||::connect(fd,reinterpret_cast<sockaddr*>(&u),sizeof u)!=0){std::cerr<<"vant agent: Vantage agent socket unavailable at "<<path<<"\n";if(fd>=0)::close(fd);return std::nullopt;}auto q=request_json("cli",method,params);if(!write_all(fd,q)){::close(fd);return std::nullopt;}std::string out;char b[4096];ssize_t n;while((n=::recv(fd,b,sizeof b,0))>0)out.append(b,static_cast<std::size_t>(n));::close(fd);return out;};
+    if(a[0]=="watch"){
+        std::uint64_t after=0;
+        for(;;){auto out=exchange("events.since","{\"after\":"+std::to_string(after)+",\"limit\":256}");if(!out)return 1;if(out->find("\"ok\":true")==std::string::npos){std::cout<<*out;return 1;}if(auto result=field(*out,"result")){std::cout<<*result<<'\n';if(auto latest=field(*result,"latest")){try{after=std::stoull(*latest);}catch(...){}}}std::this_thread::sleep_for(std::chrono::milliseconds(500));}
+    }
     std::string method(a[0]),params="{}";
-    if(method=="events"||method=="watch")method="events.since";
+    if(method=="events")method="events.since";
     else if(method=="tabs")method="browser.tabs";
     else if(method=="open") { if(a.size()<2){std::cerr<<"vant agent open: URI required\n";return 2;} method="browser.navigate";params="{\"uri\":"+json_string(a[1])+(a.size()>2?",\"tab_id\":"+std::string(a[2]):"")+"}"; }
     else if(method=="snapshot") { method="page.snapshot"; if(a.size()>1)params="{\"tab_id\":"+std::string(a[1])+"}"; }
@@ -82,6 +88,6 @@ int run_agent_cli(const std::vector<std::string_view>&input){
     else if(method=="diagnostics") { method="page.diagnostics"; if(a.size()>1)params="{\"tab_id\":"+std::string(a[1])+"}"; }
     else if(method=="js"){std::string script;if(a.size()>=3&&a[1]=="--file"){std::ifstream in{std::string(a[2])};if(!in){std::cerr<<"vant agent js: cannot read script file\n";return 2;}script.assign(std::istreambuf_iterator<char>(in),{});}else if(a.size()>=2&&a[1]!="-")script=std::string(a[1]);else script.assign(std::istreambuf_iterator<char>(std::cin),{});method="page.javascript";params="{\"script\":"+json_string(script)+"}";}
     else if(method=="call"){if(a.size()<2){std::cerr<<"vant agent call: method required\n";return 2;}method=std::string(a[1]);if(a.size()>2)params=std::string(a[2]);}
-    int fd=::socket(AF_UNIX,SOCK_STREAM,0);sockaddr_un u{};u.sun_family=AF_UNIX;auto path=agent_socket_path();std::strcpy(u.sun_path,path.c_str());if(fd<0||::connect(fd,reinterpret_cast<sockaddr*>(&u),sizeof u)!=0){std::cerr<<"vant agent: Vantage agent socket unavailable at "<<path<<"\n";if(fd>=0)::close(fd);return 1;}auto q=request_json("cli",method,params);if(!write_all(fd,q)){::close(fd);return 1;}std::string out;char b[4096];ssize_t n;while((n=::recv(fd,b,sizeof b,0))>0)out.append(b,static_cast<std::size_t>(n));::close(fd);const bool ok=out.find("\"ok\":true")!=std::string::npos;if(json_output||!ok)std::cout<<out;else if(auto result=field(out,"result"))std::cout<<*result<<'\n';else std::cout<<out;return ok?0:1;
+    auto out=exchange(method,params);if(!out)return 1;const bool ok=out->find("\"ok\":true")!=std::string::npos;if(json_output||!ok)std::cout<<*out;else if(auto result=field(*out,"result"))std::cout<<*result<<'\n';else std::cout<<*out;return ok?0:1;
 }
 }

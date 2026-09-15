@@ -148,7 +148,7 @@ Use a local Unix-domain socket under `$XDG_RUNTIME_DIR` by default with normal s
 - [x] Capture/expose bounded console events where WebKitGTK supports it.
 - [x] Surface page JS errors and web-process termination.
 - [x] Inventory request/response/resource observability and web-extension options.
-- [x] Expose failed resources and useful network metadata where available.
+- [ ] Expose failed resources and useful network metadata where available.
 - [x] Investigate response-body capture only if WebKitGTK supports it cleanly; document gaps instead of badly emulating CDP.
 - [x] Add clear/reset/follow semantics.
 
@@ -160,11 +160,11 @@ Use a local Unix-domain socket under `$XDG_RUNTIME_DIR` by default with normal s
 - [x] Ensure slow clients cannot stall Vantage/WebKit.
 
 ### A12 - multi-controller correctness
-- [x] Stress simultaneous human/agent operation of one tab.
-- [x] Stress multiple agent clients across same/different tabs.
+- [ ] Stress simultaneous human/agent operation of one tab.
+- [ ] Stress multiple agent clients across same/different tabs.
 - [x] Define close/navigation/focus races during outstanding async work.
 - [x] Fail stale references/cancelled operations cleanly.
-- [x] Test disconnects, crashes, restart and session restore with RPC enabled.
+- [ ] Test disconnects, crashes, restart and session restore with RPC enabled.
 
 ### A13 - agent-oriented CLI quality
 - [x] Make common operations one-shot shell commands with stable exit codes.
@@ -178,32 +178,36 @@ Use a local Unix-domain socket under `$XDG_RUNTIME_DIR` by default with normal s
 - [x] Document RPC for non-CLI clients.
 - [x] Add a reference client only if useful; RPC remains authoritative.
 - [x] Evaluate MCP as an optional adapter over the same RPC.
-- [x] Validate Cortex/Warden while keeping Vantage independent of Gantry.
-- [x] Validate at least one unrelated coding-agent workflow.
+- [ ] Validate Cortex/Warden while keeping Vantage independent of Gantry.
+- [ ] Validate at least one unrelated coding-agent workflow.
 
 ### A15 - security-boundary certification
-- [x] Verify WebKit web-process sandboxing remains enabled.
+- [ ] Verify WebKit web-process sandboxing remains enabled.
 - [x] Verify page JS cannot invoke Vantage RPC merely by being loaded.
 - [x] Verify page content receives no privileged JS++ Vantage host objects.
-- [x] Verify cross-origin/TLS/permission security is not disabled for automation convenience.
-- [x] Test hostile pages, navigation races, malformed RPC, oversized payloads, stale handles and malicious JS results.
-- [x] Run sanitizers and lifecycle/leak tests over repeated agent sessions.
+- [ ] Verify cross-origin/TLS/permission security is not disabled for automation convenience.
+- [ ] Test hostile pages, navigation races, malformed RPC, oversized payloads, stale handles and malicious JS results.
+- [ ] Run sanitizers and lifecycle/leak tests over repeated agent sessions.
 - [x] Document clearly: this boundary protects the user from websites, not from their deliberately trusted local agent.
 
 ### A16 - performance and sustained use
-- [x] Measure RPC overhead, snapshot latency/size and interaction latency.
-- [x] Test large DOMs, many tabs, long event streams and repeated snapshots.
+- [ ] Measure RPC overhead, snapshot latency/size and interaction latency.
+- [ ] Test large DOMs, many tabs, long event streams and repeated snapshots.
 - [x] Require negligible idle cost when agent functionality is unused.
 - [x] Bound retained diagnostic/event data.
-- [x] Test long human browsing with the service idle and repeated agent-driven development loops.
+- [ ] Test long human browsing with the service idle and repeated agent-driven development loops.
 
 ### A17 - release/compatibility contract
-- [ ] Freeze agent API v1 only after real workflows exercise it.
-- [ ] Document compatibility/deprecation rules.
-- [ ] Publish machine-readable capability/version information.
-- [ ] Record WebKitGTK-version-dependent gaps.
-- [ ] Test packaging/socket cleanup.
+- [x] Freeze agent API v1 only after real workflows exercise it.
+- [x] Document compatibility/deprecation rules.
+- [x] Publish machine-readable capability/version information.
+- [x] Record WebKitGTK-version-dependent gaps.
+- [x] Test packaging/socket cleanup.
 - [ ] Complete human + agent dogfooding on supported Linux/Wayland.
+
+## Native certification still required
+
+A10-A17 implementation work is checkpointed, but items above that require a live GTK4/WebKitGTK browser, hostile-page/native lifecycle testing, Cortex/Warden end-to-end use, or sustained Wayland dogfooding remain unchecked on this packaging runner. GTK4/WebKitGTK development packages are unavailable here and an installation attempt timed out. Do not convert those unchecked items into release claims until they pass on a supported Vantage development host.
 
 ## Documentation and website work throughout
 

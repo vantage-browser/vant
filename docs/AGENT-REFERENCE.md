@@ -67,7 +67,7 @@ Vantage does not claim CDP-equivalent arbitrary response-body capture. Resource/
 
 ## A11 event stream
 
-Vantage maintains a bounded application-side event sequence. `events.since` is cursor-based and reconnect-safe: pass the last sequence you consumed as `after`. The ring is bounded; `dropped` reports overflow. The CLI aliases `vant agent events` and `vant agent watch` to an immediate event read; long-running clients should loop `events.since` themselves so a slow reader never holds the GTK/WebKit thread open.
+Vantage maintains a bounded application-side event sequence. `events.since` is cursor-based and reconnect-safe: pass the last sequence you consumed as `after`. The ring is bounded; `dropped` reports overflow. `vant agent events` performs one cursor read. `vant agent watch` continuously follows the sequence with a 500 ms client-side poll, advancing its cursor after every response. Direct clients can loop `events.since` at their preferred cadence; no slow reader holds the GTK/WebKit thread open.
 
 ```sh
 vant agent call events.since '{"after":0,"limit":256}'
@@ -116,3 +116,7 @@ RPC input is bounded to 1 MiB and the local socket is mode 0600. Vantage does no
 ## A16 performance bounds
 
 Agent state is deliberately bounded: semantic snapshots return at most 500 interactive elements, page diagnostics retain 500 entries, the application event sequence retains 2,048 entries, and a single event read returns at most 1,024. The RPC acceptor sleeps while idle. See `docs/evidence/a16-agent-performance.md` for benchmark evidence and native-host certification caveats.
+
+## A17 compatibility and release status
+
+Protocol number 1 is currently **preview**, not frozen stable v1. Always inspect `capabilities` and `describe`. See `docs/AGENT-COMPATIBILITY.md` for compatibility rules and WebKitGTK-dependent gaps. Stable-v1 declaration is intentionally blocked on native Linux/Wayland dogfooding rather than inferred from UI-independent tests.

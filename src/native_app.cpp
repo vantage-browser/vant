@@ -31,6 +31,15 @@ struct WindowState;
 struct ApplicationState;
 struct DownloadContext;
 
+constexpr const char *agent_diagnostics_script = R"JS((()=>{
+  if(window.__vantageAgentDiagnostics)return;
+  const state=window.__vantageAgentDiagnostics={events:[],limit:500,dropped:0};
+  const push=(type,data)=>{if(state.events.length>=state.limit){state.events.shift();state.dropped++;}state.events.push({time:Date.now(),type,...data});};
+  for(const level of ['debug','log','info','warn','error']){const original=console[level].bind(console);console[level]=(...args)=>{try{push('console',{level,args:args.map(v=>{try{return typeof v==='string'?v:JSON.stringify(v)}catch{return String(v)}})})}catch{}return original(...args)}}
+  addEventListener('error',e=>push('error',{message:e.message||'',source:e.filename||'',line:e.lineno||0,column:e.colno||0}));
+  addEventListener('unhandledrejection',e=>push('unhandledrejection',{message:String(e.reason&&e.reason.stack||e.reason||'')}));
+})())JS";
+
 struct TabState {
     vantage::TabId id{};
     WindowState *window{};
@@ -1205,19 +1214,6 @@ void load_changed(WebKitWebView *view, WebKitLoadEvent event, TabState *tab) {
         tab->pending_web_uri.clear();
         tab->recovering_blank_navigation = false;
     }
-    // Install a page-world diagnostics recorder for trusted agent inspection. It
-    // only records page-visible console/error data; it exposes no Vantage host
-    // objects or RPC capability to the page.
-    constexpr auto agent_diagnostics_script = R"JS((()=>{
-      if(window.__vantageAgentDiagnostics)return;
-      const state=window.__vantageAgentDiagnostics={events:[],limit:500,dropped:0};
-      const push=(type,data)=>{if(state.events.length>=state.limit){state.events.shift();state.dropped++;}state.events.push({time:Date.now(),type,...data});};
-      for(const level of ['debug','log','info','warn','error']){const original=console[level].bind(console);console[level]=(...args)=>{try{push('console',{level,args:args.map(v=>{try{return typeof v==='string'?v:JSON.stringify(v)}catch{return String(v)}})})}catch{}return original(...args)}}
-      addEventListener('error',e=>push('error',{message:e.message||'',source:e.filename||'',line:e.lineno||0,column:e.colno||0}));
-      addEventListener('unhandledrejection',e=>push('unhandledrejection',{message:String(e.reason&&e.reason.stack||e.reason||'')}));
-    })())JS";
-    webkit_web_view_evaluate_javascript(view, agent_diagnostics_script, -1, nullptr,
-        "vantage-agent://diagnostics", nullptr, nullptr, nullptr);
     if (!page_uri || (!g_str_has_prefix(page_uri, "http://") && !g_str_has_prefix(page_uri, "https://"))) return;
     auto *request = new FaviconRequest{tab->window,
         WEBKIT_WEB_VIEW(g_object_ref(view)), nullptr, nullptr, page_uri};
@@ -2539,6 +2535,12 @@ TabState *new_tab(WindowState *state, const std::string &uri, bool load_initial)
         ? WEBKIT_WEB_VIEW(g_object_new(WEBKIT_TYPE_WEB_VIEW, "network-session", state->private_session, nullptr))
         : WEBKIT_WEB_VIEW(g_object_new(WEBKIT_TYPE_WEB_VIEW, "network-session",
               state->owner->network_session, nullptr));
+    // Capture page diagnostics from document start without exposing any native
+    // Vantage object into the page world.
+    auto *agent_script = webkit_user_script_new(agent_diagnostics_script,
+        WEBKIT_USER_CONTENT_INJECT_ALL_FRAMES, WEBKIT_USER_SCRIPT_INJECT_AT_DOCUMENT_START, nullptr, nullptr);
+    webkit_user_content_manager_add_script(webkit_web_view_get_user_content_manager(tab->view), agent_script);
+    webkit_user_script_unref(agent_script);
     auto *find_style = webkit_user_style_sheet_new(
         ".vantage-find-match{display:contents!important;background:transparent!important;color:#ffd37a!important;"
         "border:0!important;border-radius:0!important;padding:0!important;margin:0!important;box-shadow:none!important}"
@@ -3215,8 +3217,8 @@ std::string gobject_properties_json(GObject *object) {
 std::string webkit_describe_json(){return R"JSON({"webkit.webview":{"returns":"selected WebKitWebView readable GObject properties"},"webkit.settings":{"returns":"selected WebKitSettings readable GObject properties"},"webkit.network":{"returns":"selected WebKitNetworkSession readable GObject properties"},"webkit.setting.set":{"params":{"tab_id":"integer?","name":"string","value":"bool|string|number"},"effect":"sets a writable WebKitSettings property"},"page.javascript":{"params":{"tab_id":"integer?","script":"string"},"returns":"JSON-serialisable page value"}})JSON";}
 
 std::string agent_capabilities_json() {
-    return "{\"protocol\":1,\"namespaces\":[\"browser\",\"page\",\"webkit\",\"downloads\",\"bookmarks\",\"history\",\"permissions\"],"
-           "\"features\":[\"live-session\",\"stable-ids\",\"javascript\",\"semantic-snapshot\",\"semantic-interaction\",\"content-inspection\",\"webkit-introspection\",\"browser-data\"]}";
+    return "{\"protocol\":1,\"stability\":\"preview\",\"namespaces\":[\"browser\",\"page\",\"webkit\",\"downloads\",\"bookmarks\",\"history\",\"permissions\",\"events\"],"
+           "\"features\":[\"live-session\",\"stable-ids\",\"javascript\",\"semantic-snapshot\",\"semantic-interaction\",\"content-inspection\",\"webkit-introspection\",\"browser-data\",\"diagnostics\",\"event-sequence\",\"multi-controller\"]}";
 }
 
 struct AgentJavascriptResult { std::string id; vantage::AgentReply reply; };

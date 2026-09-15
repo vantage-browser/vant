@@ -6,7 +6,7 @@ rpc=(root/'src/agent_rpc.cpp').read_text()
 assert 'chmod(impl_->path.c_str(),0600)' in rpc
 assert 'request_too_large' in rpc
 assert '1024*1024' in rpc
-assert 'vantage-agent://diagnostics' in native
+assert 'WEBKIT_USER_SCRIPT_INJECT_AT_DOCUMENT_START' in native
 assert 'window.__vantageAgentDiagnostics' in native
 # Page instrumentation must remain observational, not a native host bridge.
 for forbidden in ('window.vantage=', 'window.Vantage=', 'window.agentRpc=', 'window.__vantageRpc='):
