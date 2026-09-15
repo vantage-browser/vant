@@ -24,3 +24,9 @@ Methods: `browser.windows`, `browser.tabs`, `browser.window.new`, `browser.tab.n
 `page.javascript` evaluates arbitrary JavaScript in the selected live WebKit view. `vant agent js 'document.title'`, `vant agent js --file script.js`, and piping a script to `vant agent js -` are convenience forms. JSON-serialisable values are returned structurally; `undefined` maps to JSON `null`. JavaScript exceptions become structured `javascript_error` responses.
 
 This execution is initiated by the trusted Vantage application against the page. It does not inject Vantage RPC, filesystem/process APIs or privileged JS++ host objects into the page. Main-frame evaluation is implemented first; explicit subframe/world targeting remains capability-versioned where WebKitGTK exposes a suitable stable application API.
+
+## Semantic snapshots
+
+`page.snapshot` returns a compact semantic inventory of up to 500 interactive elements with role, accessible-ish name/text, visibility/state and references such as `@e4_17`. The first number is the page's semantic generation. A MutationObserver invalidates all references whenever the DOM mutates; a new snapshot creates fresh refs. Vantage never silently retargets a stale ref to a different element.
+
+The initial semantic extractor covers native interactive controls, ARIA-role elements, contenteditable and tabindex targets. Shadow DOM and cross-origin iframe depth are reported as current limitations rather than bypassing WebKit's page-origin rules.

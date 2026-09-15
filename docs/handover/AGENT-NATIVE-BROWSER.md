@@ -106,12 +106,12 @@ Use a local Unix-domain socket under `$XDG_RUNTIME_DIR` by default with normal s
 - [x] Keep privileged Vantage JS++ hosts out of page realms.
 
 ### A5 - semantic snapshots and element references
-- [ ] Produce compact agent-oriented page snapshots.
-- [ ] Prefer accessibility/semantic information; supplement through page JS where needed.
-- [ ] Include role/name/text/state and compact refs such as `@e17`.
-- [ ] Strictly invalidate refs after navigation/DOM/frame replacement rather than retargeting them.
-- [ ] Offer compact defaults plus opt-in detail.
-- [ ] Test SPAs, shadow DOM, iframes, duplicate labels and mutating DOMs.
+- [x] Produce compact agent-oriented page snapshots.
+- [x] Prefer accessibility/semantic information; supplement through page JS where needed.
+- [x] Include role/name/text/state and compact refs such as `@e17`.
+- [x] Strictly invalidate refs after navigation/DOM/frame replacement rather than retargeting them.
+- [x] Offer compact defaults plus opt-in detail.
+- [x] Test SPAs, shadow DOM, iframes, duplicate labels and mutating DOMs.
 
 ### A6 - semantic interaction
 - [ ] Add click/focus/fill/type/clear/select/check/scroll/key operations.
