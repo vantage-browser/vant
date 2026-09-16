@@ -53,6 +53,31 @@ The trusted agent API uses Vantage's authoritative services rather than shadow c
 
 Destructive operations are explicit RPC methods and return structured success/errors. There is intentionally no extra agent-only confirmation ceremony: the caller is already a trusted same-user agent.
 
+## Direct HTTP requests (`net.fetch`)
+
+`net.fetch` is an application-side HTTP client for APIs and machine-readable
+resources; use `browser.*`/`page.*` for rendered page work and
+`page.javascript` + `window.fetch()` only when page-origin semantics are needed.
+
+```sh
+vant agent fetch https://api.example.com/status
+vant agent fetch https://api.example.com/items '{"method":"POST","headers":{"Content-Type":"application/json"},"body":"{\"name\":\"demo\"}"}'
+```
+
+Params: `url` (http/https only, required), `method` (default GET), `headers`
+(object of string pairs), `body` (exact request bytes), `timeout_ms`
+(1000-25000, default 15000; a read/idle timeout, not a total deadline),
+`max_bytes` (1-4194304, default 1048576; bounds the retained response body).
+Result: `status`, `ok` (2xx), `url`, `headers`, `body`, `body_encoding`
+(`text` or `base64` for non-UTF-8), `truncated` and `bytes` (the full response
+size when known).
+
+Behavior: redirects are not auto-followed (a 3xx is returned with its
+`Location` header); no default `User-Agent` is sent; a bare `body` uses
+`application/octet-stream`; browser cookies are never attached, so API
+authentication must be supplied explicitly. This is trusted agent-side HTTP:
+page JavaScript cannot invoke it, and it is not bridged into the WebKit page.
+
 ## A10 diagnostics
 
 `page.diagnostics` returns the bounded page-world console/error/unhandled-rejection ring for a tab. `page.diagnostics.clear` returns then clears it. `page.native_diagnostics` reports the last top-level load error, the last WebKit web-process termination, and the current `responsive` state of the tab's WebKit web process (from WebKitGTK's responsiveness probe; it reflects process IPC health, not whether an individual page evaluation will return). The page recorder is injected by Vantage but deliberately exposes no native Vantage object to page JavaScript.
