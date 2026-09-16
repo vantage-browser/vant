@@ -27,6 +27,8 @@ bool agent_socket_is_cloexec(const std::string &path) {
 }
 
 int main(){
+  auto headers=vantage::json_param_string_object(R"({"headers":{"Authorization":"Bearer token","X-Test":"yes"}})","headers");
+  assert(headers.size()==2); assert(headers[0].first=="Authorization"); assert(headers[0].second=="Bearer token"); assert(headers[1].first=="X-Test"); assert(headers[1].second=="yes");
   vantage::AgentEventLog log(2);
   assert(log.publish("one","{\"n\":1}")==1);
   assert(log.publish("two")==2);

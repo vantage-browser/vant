@@ -63,6 +63,24 @@ char json_value_kind(std::string_view json,std::string_view key){
     if(c=='-'||(c>='0'&&c<='9')) return 'n';
     return '?';
 }
+std::vector<std::pair<std::string,std::string>> json_param_string_object(std::string_view json,std::string_view key){
+    std::vector<std::pair<std::string,std::string>> out;
+    auto raw=field(json,key); if(!raw||raw->size()<2||raw->front()!='{'||raw->back()!='}') return out;
+    std::size_t p=1;
+    auto skip=[&]{while(p<raw->size()&&std::isspace(static_cast<unsigned char>((*raw)[p])))++p;};
+    auto string_value=[&]()->std::optional<std::string>{
+        skip(); if(p>=raw->size()||(*raw)[p]!='"')return std::nullopt; ++p; std::string value; bool esc=false;
+        for(;p<raw->size();++p){char c=(*raw)[p]; if(esc){switch(c){case 'n':value+='\n';break;case 'r':value+='\r';break;case 't':value+='\t';break;default:value+=c;}esc=false;}else if(c=='\\')esc=true;else if(c=='"'){++p;return value;}else value+=c;} return std::nullopt;
+    };
+    skip(); if(p<raw->size()&&(*raw)[p]=='}')return out;
+    while(p<raw->size()){
+        auto k=string_value(); if(!k)return {}; skip(); if(p>=raw->size()||(*raw)[p++]!=':')return {};
+        auto v=string_value(); if(!v)return {}; out.emplace_back(std::move(*k),std::move(*v)); skip();
+        if(p<raw->size()&&(*raw)[p]==','){++p;continue;} if(p<raw->size()&&(*raw)[p]=='}')break; return {};
+    }
+    return out;
+}
+
 std::string agent_ok(std::string_view id,std::string_view result){return "{\"version\":1,\"id\":"+json_string(id)+",\"ok\":true,\"result\":"+std::string(result)+"}";}
 std::string agent_error(std::string_view id,std::string_view code,std::string_view message){return "{\"version\":1,\"id\":"+json_string(id)+",\"ok\":false,\"error\":{\"code\":"+json_string(code)+",\"message\":"+json_string(message)+"}}";}
 AgentEventLog::AgentEventLog(std::size_t capacity):capacity_(std::max<std::size_t>(1,capacity)){}
@@ -87,11 +105,11 @@ bool AgentRpcServer::start(std::string *error){
 }
 void AgentRpcServer::stop(){if(!impl_||!impl_->running.exchange(false))return;::shutdown(impl_->fd,SHUT_RDWR);::close(impl_->fd);impl_->fd=-1;if(impl_->thread.joinable())impl_->thread.join();{std::lock_guard guard(impl_->clients_mutex);for(auto &client:impl_->clients)if(client.joinable())client.join();impl_->clients.clear();}::unlink(impl_->path.c_str());}
 int run_agent_cli(const std::vector<std::string_view>&input){
-    if(input.empty()){std::cerr<<"usage: vant agent [--json] <status|version|capabilities|tabs|open|snapshot|click|fill|diagnostics|events|watch|call|js> ...\n";return 2;}
+    if(input.empty()){std::cerr<<"usage: vant agent [--json] <status|version|capabilities|tabs|open|snapshot|click|fill|fetch|diagnostics|events|watch|call|js> ...\n";return 2;}
     std::vector<std::string_view> a=input; bool json_output=false;
     if(!a.empty()&&a[0]=="--json"){json_output=true;a.erase(a.begin());}
     if(a.empty())return 2;
-    if(a[0]=="--help"||a[0]=="help"){std::cout<<"vant agent [--json] status|version|capabilities|tabs|open URI [TAB]|snapshot [TAB]|click REF [TAB]|fill REF VALUE [TAB]|diagnostics [TAB]|events|watch|call METHOD [JSON]|js [--file FILE|-|SCRIPT]\n";return 0;}
+    if(a[0]=="--help"||a[0]=="help"){std::cout<<"vant agent [--json] status|version|capabilities|tabs|open URI [TAB]|snapshot [TAB]|click REF [TAB]|fill REF VALUE [TAB]|fetch URL [OPTIONS_JSON]|diagnostics [TAB]|events|watch|call METHOD [JSON]|js [--file FILE|-|SCRIPT]\n";return 0;}
     auto exchange=[](std::string_view method,std::string_view params)->std::optional<std::string>{int fd=::socket(AF_UNIX,SOCK_STREAM,0);sockaddr_un u{};u.sun_family=AF_UNIX;auto path=agent_socket_path();std::strcpy(u.sun_path,path.c_str());if(fd<0||::connect(fd,reinterpret_cast<sockaddr*>(&u),sizeof u)!=0){std::cerr<<"vant agent: Vantage agent socket unavailable at "<<path<<"\n";if(fd>=0)::close(fd);return std::nullopt;}auto q=request_json("cli",method,params);if(!write_all(fd,q)){::close(fd);return std::nullopt;}std::string out;char b[4096];ssize_t n;while((n=::recv(fd,b,sizeof b,0))>0)out.append(b,static_cast<std::size_t>(n));::close(fd);return out;};
     if(a[0]=="watch"){
         std::uint64_t after=0;
@@ -104,6 +122,14 @@ int run_agent_cli(const std::vector<std::string_view>&input){
     else if(method=="snapshot") { method="page.snapshot"; if(a.size()>1)params="{\"tab_id\":"+std::string(a[1])+"}"; }
     else if(method=="click") { if(a.size()<2){std::cerr<<"vant agent click: element ref required\n";return 2;}method="page.interact";params="{\"ref\":"+json_string(a[1])+",\"action\":\"click\""+(a.size()>2?",\"tab_id\":"+std::string(a[2]):"")+"}"; }
     else if(method=="fill") { if(a.size()<3){std::cerr<<"vant agent fill: element ref and value required\n";return 2;}method="page.interact";params="{\"ref\":"+json_string(a[1])+",\"action\":\"fill\",\"value\":"+json_string(a[2])+(a.size()>3?",\"tab_id\":"+std::string(a[3]):"")+"}"; }
+    else if(method=="fetch") {
+        if(a.size()<2){std::cerr<<"vant agent fetch: URL required\n";return 2;}
+        method="net.fetch";
+        std::string options=a.size()>2?std::string(a[2]):"{}";
+        if(options.size()<2||options.front()!='{'||options.back()!='}'){std::cerr<<"vant agent fetch: OPTIONS_JSON must be a JSON object\n";return 2;}
+        auto inner=options.substr(1,options.size()-2);
+        params="{\"url\":"+json_string(a[1])+(inner.empty()?"":","+inner)+"}";
+    }
     else if(method=="diagnostics") { method="page.diagnostics"; if(a.size()>1)params="{\"tab_id\":"+std::string(a[1])+"}"; }
     else if(method=="js"){std::string script;if(a.size()>=3&&a[1]=="--file"){std::ifstream in{std::string(a[2])};if(!in){std::cerr<<"vant agent js: cannot read script file\n";return 2;}script.assign(std::istreambuf_iterator<char>(in),{});}else if(a.size()>=2&&a[1]!="-")script=std::string(a[1]);else script.assign(std::istreambuf_iterator<char>(std::cin),{});method="page.javascript";params="{\"script\":"+json_string(script)+"}";}
     else if(method=="call"){if(a.size()<2){std::cerr<<"vant agent call: method required\n";return 2;}method=std::string(a[1]);if(a.size()>2)params=std::string(a[2]);}

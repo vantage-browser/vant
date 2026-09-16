@@ -14,7 +14,8 @@ windows, printing, zoom controls and familiar Chromium-style keyboard
 shortcuts. Bookmarks can be added, edited and bulk-removed; history supports
 bulk removal; downloads expose live byte progress, recent activity, link
 copying and file-manager actions. A trusted local agent can drive the same
-live Vantage windows and tabs through the stable v1 agent RPC: arbitrary page
+live Vantage windows and tabs through the stable v1 agent RPC, including direct
+HTTP/API requests with `vant agent fetch`: arbitrary page
 JavaScript, semantic snapshots and interaction, screenshots and content
 inspection, WebKit/Vantage introspection, browser data/services, diagnostics
 and event streaming.

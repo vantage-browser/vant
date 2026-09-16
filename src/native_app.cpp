@@ -3252,6 +3252,7 @@ std::string agent_describe_json(const std::string &name) {
         {"browser.forward", "{\"params\":{\"tab_id\":\"integer?\"},\"returns\":\"tab object\"}"},
         {"browser.cookies", "{\"params\":{\"tab_id\":\"integer?\",\"uri\":\"string?\"},\"returns\":\"cookie list scoped to the given or current URI\"}"},
         {"browser.profile", "{\"params\":{\"tab_id\":\"integer?\"},\"returns\":\"private and persistence metadata for the tab profile\"}"},
+        {"net.fetch", "{\"params\":{\"url\":\"string\",\"method\":\"string?\",\"headers\":\"object<string,string>?\",\"body\":\"string?\",\"timeout_ms\":\"integer? (1000-25000)\",\"max_bytes\":\"integer? (1-4194304)\"},\"returns\":\"status, ok, url, headers, body, body_encoding and truncated\"}"},
         {"page.javascript", "{\"params\":{\"tab_id\":\"integer?\",\"script\":\"string\"},\"returns\":\"JSON-serialisable page value\"}"},
         {"page.snapshot", "{\"params\":{\"tab_id\":\"integer?\"},\"returns\":\"semantic element inventory with @e refs, generation and page metadata\"}"},
         {"page.interact", "{\"params\":{\"tab_id\":\"integer?\",\"ref\":\"string?\",\"selector\":\"string?\",\"action\":\"click|focus|fill|type|clear|select|check|uncheck|scroll|key\",\"value\":\"string?\"},\"returns\":\"{ok:true} or {ok:false,error:stale_or_missing|disabled|hidden}\"}"},
@@ -3291,8 +3292,24 @@ std::string agent_describe_json(const std::string &name) {
 }
 
 std::string agent_capabilities_json() {
-    return "{\"protocol\":1,\"stability\":\"stable\",\"namespaces\":[\"browser\",\"page\",\"webkit\",\"downloads\",\"bookmarks\",\"history\",\"permissions\",\"events\"],"
-           "\"features\":[\"live-session\",\"stable-ids\",\"javascript\",\"semantic-snapshot\",\"semantic-interaction\",\"content-inspection\",\"webkit-introspection\",\"browser-data\",\"diagnostics\",\"event-sequence\",\"multi-controller\"]}";
+    return "{\"protocol\":1,\"stability\":\"stable\",\"namespaces\":[\"browser\",\"page\",\"net\",\"webkit\",\"downloads\",\"bookmarks\",\"history\",\"permissions\",\"events\"],"
+           "\"features\":[\"api-fetch\",\"live-session\",\"stable-ids\",\"javascript\",\"semantic-snapshot\",\"semantic-interaction\",\"content-inspection\",\"webkit-introspection\",\"browser-data\",\"diagnostics\",\"event-sequence\",\"multi-controller\"]}";
+}
+
+
+struct AgentFetchResult { std::string id; vantage::AgentReply reply; SoupSession *session{}; SoupMessage *message{}; std::size_t max_bytes{}; };
+void agent_fetch_finished(GObject *source, GAsyncResult *result, void *raw) {
+    std::unique_ptr<AgentFetchResult> state(static_cast<AgentFetchResult *>(raw));
+    GError *error=nullptr; auto *bytes=soup_session_send_and_read_finish(SOUP_SESSION(source),result,&error);
+    if(error||!bytes){state->reply(vantage::agent_error(state->id,"fetch_error",error&&error->message?error->message:"request failed"));if(error)g_error_free(error);if(bytes)g_bytes_unref(bytes);g_object_unref(state->message);g_object_unref(state->session);return;}
+    gsize size=0;const auto*data=static_cast<const char*>(g_bytes_get_data(bytes,&size));const auto kept=std::min<std::size_t>(size,state->max_bytes);const bool truncated=size>kept;
+    std::string body;std::string encoding="text";
+    if(data&&g_utf8_validate(data,static_cast<gssize>(kept),nullptr))body.assign(data,kept);else{auto*encoded=g_base64_encode(reinterpret_cast<const guchar*>(data),kept);body=encoded?encoded:"";g_free(encoded);encoding="base64";}
+    std::string headers="{";bool first=true;std::pair<std::string*,bool*> header_state{&headers,&first};soup_message_headers_foreach(soup_message_get_response_headers(state->message),[](const char*n,const char*v,gpointer raw_headers){auto*p=static_cast<std::pair<std::string*,bool*>*>(raw_headers);if(!*p->second)*p->first+=",";*p->second=false;*p->first+=vantage::json_string(n)+":"+vantage::json_string(v?v:"");},&header_state);
+    headers+="}";
+    auto *uri=soup_message_get_uri(state->message);auto *uri_text=uri?g_uri_to_string(uri):nullptr;
+    const auto status=soup_message_get_status(state->message);std::string out="{\"status\":"+std::to_string(status)+",\"ok\":"+std::string(status>=200&&status<300?"true":"false")+",\"url\":"+vantage::json_string(uri_text?uri_text:"")+",\"headers\":"+headers+",\"body\":"+vantage::json_string(body)+",\"body_encoding\":"+vantage::json_string(encoding)+",\"truncated\":"+(truncated?"true":"false")+",\"bytes\":"+std::to_string(size)+"}";
+    if(uri_text)g_free(uri_text);g_bytes_unref(bytes);g_object_unref(state->message);g_object_unref(state->session);state->reply(vantage::agent_ok(state->id,out));
 }
 
 struct AgentJavascriptResult { std::string id; vantage::AgentReply reply; };
@@ -3355,6 +3372,16 @@ gboolean dispatch_agent_request(void *raw) {
     }
     if (r.method == "webkit.setting.set") {
         auto*t=agent_tab(owner,static_cast<vantage::TabId>(vantage::json_param_integer(r.params_json,"tab_id")));if(!t){done(vantage::agent_error(r.id,"not_found","tab not found"));return G_SOURCE_REMOVE;}auto name=vantage::json_param_string(r.params_json,"name");auto*settings=webkit_web_view_get_settings(t->view);auto*spec=g_object_class_find_property(G_OBJECT_GET_CLASS(settings),name.c_str());if(!spec||!(spec->flags&G_PARAM_WRITABLE)){done(vantage::agent_error(r.id,"invalid_property","unknown or read-only WebKit setting"));return G_SOURCE_REMOVE;}GValue v=G_VALUE_INIT;g_value_init(&v,spec->value_type);const char kind=vantage::json_value_kind(r.params_json,"value");if(G_VALUE_HOLDS_BOOLEAN(&v)){if(kind!='b'){g_value_unset(&v);done(vantage::agent_error(r.id,"invalid_param_type","value must be a JSON boolean for this WebKit setting"));return G_SOURCE_REMOVE;}g_value_set_boolean(&v,vantage::json_param_bool(r.params_json,"value"));}else if(G_VALUE_HOLDS_STRING(&v)){if(kind!='s'){g_value_unset(&v);done(vantage::agent_error(r.id,"invalid_param_type","value must be a JSON string for this WebKit setting"));return G_SOURCE_REMOVE;}auto x=vantage::json_param_string(r.params_json,"value");g_value_set_string(&v,x.c_str());}else if(G_VALUE_HOLDS_INT(&v)){if(kind!='n'){g_value_unset(&v);done(vantage::agent_error(r.id,"invalid_param_type","value must be a JSON number for this WebKit setting"));return G_SOURCE_REMOVE;}g_value_set_int(&v,static_cast<int>(vantage::json_param_integer(r.params_json,"value")));}else if(G_VALUE_HOLDS_UINT(&v)){if(kind!='n'){g_value_unset(&v);done(vantage::agent_error(r.id,"invalid_param_type","value must be a JSON number for this WebKit setting"));return G_SOURCE_REMOVE;}g_value_set_uint(&v,static_cast<unsigned>(vantage::json_param_integer(r.params_json,"value")));}else{g_value_unset(&v);done(vantage::agent_error(r.id,"unsupported_property_type","setting type not supported by RPC v1"));return G_SOURCE_REMOVE;}g_object_set_property(G_OBJECT(settings),name.c_str(),&v);g_value_unset(&v);done(vantage::agent_ok(r.id,"true"));return G_SOURCE_REMOVE;
+    }
+    if (r.method == "net.fetch") {
+        auto url=vantage::json_param_string(r.params_json,"url");if(url.empty()){done(vantage::agent_error(r.id,"invalid_params","url required"));return G_SOURCE_REMOVE;}
+        const auto scheme=g_uri_parse_scheme(url.c_str());const bool allowed=scheme&&(g_ascii_strcasecmp(scheme,"http")==0||g_ascii_strcasecmp(scheme,"https")==0);g_free(scheme);if(!allowed){done(vantage::agent_error(r.id,"invalid_params","url must use http or https"));return G_SOURCE_REMOVE;}
+        auto method=vantage::json_param_string(r.params_json,"method");if(method.empty())method="GET";
+        auto *message=soup_message_new(method.c_str(),url.c_str());if(!message){done(vantage::agent_error(r.id,"invalid_params","invalid URL or HTTP method"));return G_SOURCE_REMOVE;}
+        for(const auto&[name,value]:vantage::json_param_string_object(r.params_json,"headers")){if(name.empty()||name.find_first_of("\r\n")!=std::string::npos||value.find_first_of("\r\n")!=std::string::npos){g_object_unref(message);done(vantage::agent_error(r.id,"invalid_params","header names and values must not contain newlines"));return G_SOURCE_REMOVE;}soup_message_headers_replace(soup_message_get_request_headers(message),name.c_str(),value.c_str());}
+        auto body=vantage::json_param_string(r.params_json,"body");if(!body.empty()||vantage::json_value_kind(r.params_json,"body")=='s'){auto*bytes=g_bytes_new(body.data(),body.size());const char*content_type=soup_message_headers_get_one(soup_message_get_request_headers(message),"Content-Type");soup_message_set_request_body_from_bytes(message,content_type&&*content_type?content_type:"application/octet-stream",bytes);g_bytes_unref(bytes);}
+        auto timeout=std::clamp<long long>(vantage::json_param_integer(r.params_json,"timeout_ms",15000),1000,25000);auto max_bytes=static_cast<std::size_t>(std::clamp<long long>(vantage::json_param_integer(r.params_json,"max_bytes",1048576),1,4194304));
+        auto*session=soup_session_new_with_options("timeout",static_cast<guint>(std::max<long long>(1,(timeout+999)/1000)),nullptr);auto*state=new AgentFetchResult{r.id,std::move(done),SOUP_SESSION(g_object_ref(session)),SOUP_MESSAGE(g_object_ref(message)),max_bytes};soup_session_send_and_read_async(session,message,G_PRIORITY_DEFAULT,nullptr,agent_fetch_finished,state);g_object_unref(message);g_object_unref(session);return G_SOURCE_REMOVE;
     }
     if (r.method == "page.screenshot") {
         auto*t=agent_tab(owner,static_cast<vantage::TabId>(vantage::json_param_integer(r.params_json,"tab_id")));if(!t){done(vantage::agent_error(r.id,"not_found","tab not found"));return G_SOURCE_REMOVE;}auto path=vantage::json_param_string(r.params_json,"path");if(path.empty()){done(vantage::agent_error(r.id,"invalid_params","path required"));return G_SOURCE_REMOVE;}auto region=vantage::json_param_bool(r.params_json,"full_page",false)?WEBKIT_SNAPSHOT_REGION_FULL_DOCUMENT:WEBKIT_SNAPSHOT_REGION_VISIBLE;webkit_web_view_get_snapshot(t->view,region,WEBKIT_SNAPSHOT_OPTIONS_NONE,nullptr,agent_snapshot_finished,new AgentSnapshotResult{r.id,std::move(done),path});return G_SOURCE_REMOVE;
