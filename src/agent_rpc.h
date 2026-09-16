@@ -5,6 +5,7 @@
 #include <mutex>
 #include <deque>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -19,7 +20,8 @@ std::string json_param_string(std::string_view json, std::string_view key);
 long long json_param_integer(std::string_view json, std::string_view key, long long fallback = 0);
 bool json_param_bool(std::string_view json, std::string_view key, bool fallback = false);
 char json_value_kind(std::string_view json, std::string_view key);
-std::vector<std::pair<std::string, std::string>> json_param_string_object(std::string_view json, std::string_view key);
+bool json_param_has(std::string_view json, std::string_view key);
+std::optional<std::vector<std::pair<std::string, std::string>>> json_param_string_object(std::string_view json, std::string_view key);
 std::string agent_ok(std::string_view id, std::string_view result_json = "null");
 std::string agent_error(std::string_view id, std::string_view code, std::string_view message);
 

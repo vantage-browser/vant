@@ -26,17 +26,75 @@ bool set_cloexec(int fd) {
     if (flags < 0 || fcntl(fd, F_SETFD, flags | FD_CLOEXEC) < 0) return false;
     return true;
 }
+std::optional<std::string> read_json_string(std::string_view json, std::size_t &p);
 std::optional<std::string> field(std::string_view json, std::string_view key) {
     const std::string needle = "\"" + std::string(key) + "\"";
     auto p=json.find(needle); if(p==std::string_view::npos)return std::nullopt;
     p=json.find(':',p+needle.size()); if(p==std::string_view::npos)return std::nullopt; ++p;
     while(p<json.size() && std::isspace(static_cast<unsigned char>(json[p])))++p;
     if(p>=json.size())return std::nullopt;
-    if(json[p]=='\"') { ++p; std::string out; bool esc=false; for(;p<json.size();++p){char c=json[p]; if(esc){switch(c){case 'n':out+='\n';break;case 'r':out+='\r';break;case 't':out+='\t';break;default:out+=c;}esc=false;}else if(c=='\\')esc=true;else if(c=='\"')return out;else out+=c;} return std::nullopt; }
+    if(json[p]=='\"') return read_json_string(json, p);
     std::size_t e=p; int depth=0; bool quote=false,esc=false;
-    for(;e<json.size();++e){char c=json[e]; if(quote){if(esc)esc=false;else if(c=='\\')esc=true;else if(c=='\"')quote=false;continue;} if(c=='\"'){quote=true;continue;} if(c=='{'||c=='[')++depth; else if(c=='}'||c==']'){if(depth==0)break;--depth;} else if(c==','&&depth==0)break;}
+    for(;e<json.size();++e){char c=json[e]; if(quote){if(esc)esc=false;else if(c=='\\')esc=true;else if(c=='"')quote=false;continue;} if(c=='"'){quote=true;continue;} if(c=='{'||c=='[')++depth; else if(c=='}'||c==']'){if(depth==0)break;--depth;} else if(c==','&&depth==0)break;}
     while(e>p&&std::isspace(static_cast<unsigned char>(json[e-1])))--e;
     return std::string(json.substr(p,e-p));
+}
+// read_json_string decodes a JSON string literal starting at the opening quote
+// at json[p], consuming through its closing quote. It decodes the standard
+// escapes and \uXXXX (UTF-8 encoded); unknown escapes pass the literal
+// character through for compatibility with lenient callers.
+std::optional<std::string> read_json_string(std::string_view json, std::size_t &p) {
+    if (p >= json.size() || json[p] != '"') return std::nullopt;
+    ++p;
+    std::string out;
+    while (p < json.size()) {
+        const char c = json[p];
+        if (c == '"') { ++p; return out; }
+        if (c == '\\') {
+            if (++p >= json.size()) return std::nullopt;
+            const char e = json[p];
+            switch (e) {
+            case 'n': out += '\n'; break;
+            case 'r': out += '\r'; break;
+            case 't': out += '\t'; break;
+            case 'b': out += '\b'; break;
+            case 'f': out += '\f'; break;
+            case '/': out += '/'; break;
+            case '\\': out += '\\'; break;
+            case '"': out += '"'; break;
+            case 'u': {
+                if (p + 4 >= json.size()) return std::nullopt;
+                unsigned cp = 0;
+                for (int i = 0; i < 4; ++i) {
+                    const char h = json[p + 1 + static_cast<std::size_t>(i)];
+                    unsigned v;
+                    if (h >= '0' && h <= '9') v = static_cast<unsigned>(h - '0');
+                    else if (h >= 'a' && h <= 'f') v = static_cast<unsigned>(h - 'a' + 10);
+                    else if (h >= 'A' && h <= 'F') v = static_cast<unsigned>(h - 'A' + 10);
+                    else return std::nullopt;
+                    cp = (cp << 4) | v;
+                }
+                p += 4;
+                if (cp < 0x80) out += static_cast<char>(cp);
+                else if (cp < 0x800) {
+                    out += static_cast<char>(0xC0 | (cp >> 6));
+                    out += static_cast<char>(0x80 | (cp & 0x3F));
+                } else {
+                    out += static_cast<char>(0xE0 | (cp >> 12));
+                    out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+                    out += static_cast<char>(0x80 | (cp & 0x3F));
+                }
+                break;
+            }
+            default: out += e; break;  // lenient: keep unknown escapes as-is
+            }
+            ++p;
+            continue;
+        }
+        out += c;
+        ++p;
+    }
+    return std::nullopt;
 }
 bool parse_request(std::string_view line, AgentRequest &r) {
     auto id=field(line,"id"), method=field(line,"method"); if(!id||!method)return false;
@@ -63,20 +121,24 @@ char json_value_kind(std::string_view json,std::string_view key){
     if(c=='-'||(c>='0'&&c<='9')) return 'n';
     return '?';
 }
-std::vector<std::pair<std::string,std::string>> json_param_string_object(std::string_view json,std::string_view key){
+bool json_param_has(std::string_view json,std::string_view key){
+    return field(json,key).has_value();
+}
+std::optional<std::vector<std::pair<std::string,std::string>>> json_param_string_object(std::string_view json,std::string_view key){
+    auto raw=field(json,key);
+    if(!raw) return std::nullopt;
+    if(raw->size()<2||raw->front()!='{'||raw->back()!='}') return std::nullopt;
     std::vector<std::pair<std::string,std::string>> out;
-    auto raw=field(json,key); if(!raw||raw->size()<2||raw->front()!='{'||raw->back()!='}') return out;
     std::size_t p=1;
     auto skip=[&]{while(p<raw->size()&&std::isspace(static_cast<unsigned char>((*raw)[p])))++p;};
     auto string_value=[&]()->std::optional<std::string>{
-        skip(); if(p>=raw->size()||(*raw)[p]!='"')return std::nullopt; ++p; std::string value; bool esc=false;
-        for(;p<raw->size();++p){char c=(*raw)[p]; if(esc){switch(c){case 'n':value+='\n';break;case 'r':value+='\r';break;case 't':value+='\t';break;default:value+=c;}esc=false;}else if(c=='\\')esc=true;else if(c=='"'){++p;return value;}else value+=c;} return std::nullopt;
+        skip(); if(p>=raw->size()||(*raw)[p]!='"')return std::nullopt; auto v=read_json_string(*raw,p); if(!v)return std::nullopt; return v;
     };
     skip(); if(p<raw->size()&&(*raw)[p]=='}')return out;
     while(p<raw->size()){
-        auto k=string_value(); if(!k)return {}; skip(); if(p>=raw->size()||(*raw)[p++]!=':')return {};
-        auto v=string_value(); if(!v)return {}; out.emplace_back(std::move(*k),std::move(*v)); skip();
-        if(p<raw->size()&&(*raw)[p]==','){++p;continue;} if(p<raw->size()&&(*raw)[p]=='}')break; return {};
+        auto k=string_value(); if(!k)return std::nullopt; skip(); if(p>=raw->size()||(*raw)[p++]!=':')return std::nullopt;
+        auto v=string_value(); if(!v)return std::nullopt; out.emplace_back(std::move(*k),std::move(*v)); skip();
+        if(p<raw->size()&&(*raw)[p]==','){++p;continue;} if(p<raw->size()&&(*raw)[p]=='}')break; return std::nullopt;
     }
     return out;
 }

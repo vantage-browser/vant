@@ -12,6 +12,7 @@
 #include <webkit/webkit.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cctype>
 #include <cmath>
@@ -3252,7 +3253,7 @@ std::string agent_describe_json(const std::string &name) {
         {"browser.forward", "{\"params\":{\"tab_id\":\"integer?\"},\"returns\":\"tab object\"}"},
         {"browser.cookies", "{\"params\":{\"tab_id\":\"integer?\",\"uri\":\"string?\"},\"returns\":\"cookie list scoped to the given or current URI\"}"},
         {"browser.profile", "{\"params\":{\"tab_id\":\"integer?\"},\"returns\":\"private and persistence metadata for the tab profile\"}"},
-        {"net.fetch", "{\"params\":{\"url\":\"string\",\"method\":\"string?\",\"headers\":\"object<string,string>?\",\"body\":\"string?\",\"timeout_ms\":\"integer? (1000-25000)\",\"max_bytes\":\"integer? (1-4194304)\"},\"returns\":\"status, ok, url, headers, body, body_encoding and truncated\"}"},
+        {"net.fetch", "{\"params\":{\"url\":\"string (http/https only)\",\"method\":\"string? (default GET)\",\"headers\":\"object<string,string>? (no default User-Agent; set one via headers if the target requires it)\",\"body\":\"string?\",\"timeout_ms\":\"integer? 1000-25000, read/idle timeout (not a total deadline)\",\"max_bytes\":\"integer? 1-4194304, retained body cap\"},\"returns\":\"status, ok, url, headers, body, body_encoding (text|base64), truncated, bytes; redirects are NOT auto-followed; browser cookies are NOT attached\"}"},
         {"page.javascript", "{\"params\":{\"tab_id\":\"integer?\",\"script\":\"string\"},\"returns\":\"JSON-serialisable page value\"}"},
         {"page.snapshot", "{\"params\":{\"tab_id\":\"integer?\"},\"returns\":\"semantic element inventory with @e refs, generation and page metadata\"}"},
         {"page.interact", "{\"params\":{\"tab_id\":\"integer?\",\"ref\":\"string?\",\"selector\":\"string?\",\"action\":\"click|focus|fill|type|clear|select|check|uncheck|scroll|key\",\"value\":\"string?\"},\"returns\":\"{ok:true} or {ok:false,error:stale_or_missing|disabled|hidden}\"}"},
@@ -3297,19 +3298,121 @@ std::string agent_capabilities_json() {
 }
 
 
-struct AgentFetchResult { std::string id; vantage::AgentReply reply; SoupSession *session{}; SoupMessage *message{}; std::size_t max_bytes{}; };
-void agent_fetch_finished(GObject *source, GAsyncResult *result, void *raw) {
+struct AgentFetchResult {
+    std::string id;
+    vantage::AgentReply reply;
+    SoupMessage *message{};
+    std::size_t max_bytes{};
+    std::string body;
+    bool truncated{};
+    std::size_t bytes_total{};
+    std::array<char, 65536> chunk{};
+};
+
+void agent_fetch_emit(AgentFetchResult *state, GInputStream *stream) {
+    std::string headers = "{";
+    bool first = true;
+    std::pair<std::string *, bool *> header_state{&headers, &first};
+    soup_message_headers_foreach(soup_message_get_response_headers(state->message),
+        [](const char *name, const char *value, gpointer raw_headers) {
+            auto *st = static_cast<std::pair<std::string *, bool *> *>(raw_headers);
+            if (!*st->second) *st->first += ",";
+            *st->second = false;
+            *st->first += vantage::json_string(name) + ":" + vantage::json_string(value ? value : "");
+        }, &header_state);
+    headers += "}";
+    auto *uri = soup_message_get_uri(state->message);
+    auto *uri_text = uri ? g_uri_to_string(uri) : nullptr;
+    const auto status = soup_message_get_status(state->message);
+    // Report the full response size when known, otherwise the bytes read.
+    const gint64 content_length =
+        soup_message_headers_get_content_length(soup_message_get_response_headers(state->message));
+    const std::size_t bytes_total = content_length > 0
+        ? static_cast<std::size_t>(content_length) : state->bytes_total;
+    std::string encoding = "text";
+    if (!state->body.empty() && !g_utf8_validate(state->body.data(), static_cast<gssize>(state->body.size()), nullptr)) {
+        auto *encoded = g_base64_encode(reinterpret_cast<const guchar *>(state->body.data()), state->body.size());
+        state->body = encoded ? encoded : "";
+        g_free(encoded);
+        encoding = "base64";
+    }
+    std::string out = "{\"status\":" + std::to_string(status) + ",\"ok\":" +
+        std::string(status >= 200 && status < 300 ? "true" : "false") + ",\"url\":" +
+        vantage::json_string(uri_text ? uri_text : "") + ",\"headers\":" + headers + ",\"body\":" +
+        vantage::json_string(state->body) + ",\"body_encoding\":" + vantage::json_string(encoding) +
+        ",\"truncated\":" + (state->truncated ? "true" : "false") + ",\"bytes\":" + std::to_string(bytes_total) + "}";
+    if (uri_text) g_free(uri_text);
+    g_object_unref(stream);
+    g_object_unref(state->message);
+    state->reply(vantage::agent_ok(state->id, out));
+    delete state;
+}
+
+void agent_fetch_read_chunk(AgentFetchResult *state, GInputStream *stream);
+
+void agent_fetch_read_ready(GObject *source, GAsyncResult *result, void *raw) {
+    auto *state = static_cast<AgentFetchResult *>(raw);
+    auto *stream = G_INPUT_STREAM(source);
+    GError *error = nullptr;
+    const gssize n = g_input_stream_read_finish(stream, result, &error);
+    if (n < 0) {
+        state->reply(vantage::agent_error(state->id, "fetch_error",
+            error && error->message ? error->message : "read failed"));
+        if (error) g_error_free(error);
+        g_object_unref(stream);
+        g_object_unref(state->message);
+        delete state;
+        return;
+    }
+    if (n == 0) {
+        agent_fetch_emit(state, stream);
+        return;
+    }
+    state->bytes_total += static_cast<std::size_t>(n);
+    const std::size_t room = state->max_bytes - state->body.size();
+    const std::size_t keep = std::min<std::size_t>(static_cast<std::size_t>(n), room);
+    state->body.append(state->chunk.data(), keep);
+    if (static_cast<std::size_t>(n) > keep) {
+        state->truncated = true;
+        agent_fetch_emit(state, stream);
+        return;
+    }
+    agent_fetch_read_chunk(state, stream);
+}
+
+void agent_fetch_read_chunk(AgentFetchResult *state, GInputStream *stream) {
+    if (state->body.size() >= state->max_bytes) {
+        // Cap reached; probe one byte to learn whether the response has more.
+        g_input_stream_read_async(stream, state->chunk.data(), 1, G_PRIORITY_DEFAULT, nullptr,
+            [](GObject *src, GAsyncResult *res, gpointer raw) {
+                auto *st = static_cast<AgentFetchResult *>(raw);
+                auto *st_stream = G_INPUT_STREAM(src);
+                GError *err = nullptr;
+                const gssize probe = g_input_stream_read_finish(st_stream, res, &err);
+                if (err) g_clear_error(&err);
+                st->truncated = probe > 0;
+                agent_fetch_emit(st, st_stream);
+            }, state);
+        return;
+    }
+    const gsize want = std::min<std::size_t>(state->chunk.size(), state->max_bytes - state->body.size() + 1);
+    g_input_stream_read_async(stream, state->chunk.data(), want, G_PRIORITY_DEFAULT, nullptr,
+        agent_fetch_read_ready, state);
+}
+
+void agent_fetch_send_ready(GObject *source, GAsyncResult *result, void *raw) {
     std::unique_ptr<AgentFetchResult> state(static_cast<AgentFetchResult *>(raw));
-    GError *error=nullptr; auto *bytes=soup_session_send_and_read_finish(SOUP_SESSION(source),result,&error);
-    if(error||!bytes){state->reply(vantage::agent_error(state->id,"fetch_error",error&&error->message?error->message:"request failed"));if(error)g_error_free(error);if(bytes)g_bytes_unref(bytes);g_object_unref(state->message);g_object_unref(state->session);return;}
-    gsize size=0;const auto*data=static_cast<const char*>(g_bytes_get_data(bytes,&size));const auto kept=std::min<std::size_t>(size,state->max_bytes);const bool truncated=size>kept;
-    std::string body;std::string encoding="text";
-    if(data&&g_utf8_validate(data,static_cast<gssize>(kept),nullptr))body.assign(data,kept);else{auto*encoded=g_base64_encode(reinterpret_cast<const guchar*>(data),kept);body=encoded?encoded:"";g_free(encoded);encoding="base64";}
-    std::string headers="{";bool first=true;std::pair<std::string*,bool*> header_state{&headers,&first};soup_message_headers_foreach(soup_message_get_response_headers(state->message),[](const char*n,const char*v,gpointer raw_headers){auto*p=static_cast<std::pair<std::string*,bool*>*>(raw_headers);if(!*p->second)*p->first+=",";*p->second=false;*p->first+=vantage::json_string(n)+":"+vantage::json_string(v?v:"");},&header_state);
-    headers+="}";
-    auto *uri=soup_message_get_uri(state->message);auto *uri_text=uri?g_uri_to_string(uri):nullptr;
-    const auto status=soup_message_get_status(state->message);std::string out="{\"status\":"+std::to_string(status)+",\"ok\":"+std::string(status>=200&&status<300?"true":"false")+",\"url\":"+vantage::json_string(uri_text?uri_text:"")+",\"headers\":"+headers+",\"body\":"+vantage::json_string(body)+",\"body_encoding\":"+vantage::json_string(encoding)+",\"truncated\":"+(truncated?"true":"false")+",\"bytes\":"+std::to_string(size)+"}";
-    if(uri_text)g_free(uri_text);g_bytes_unref(bytes);g_object_unref(state->message);g_object_unref(state->session);state->reply(vantage::agent_ok(state->id,out));
+    GError *error = nullptr;
+    auto *stream = soup_session_send_finish(SOUP_SESSION(source), result, &error);
+    if (error || !stream) {
+        state->reply(vantage::agent_error(state->id, "fetch_error",
+            error && error->message ? error->message : "request failed"));
+        if (error) g_error_free(error);
+        g_object_unref(state->message);
+        return;
+    }
+    AgentFetchResult *raw_state = state.release();
+    agent_fetch_read_chunk(raw_state, stream);
 }
 
 struct AgentJavascriptResult { std::string id; vantage::AgentReply reply; };
@@ -3378,10 +3481,24 @@ gboolean dispatch_agent_request(void *raw) {
         const auto scheme=g_uri_parse_scheme(url.c_str());const bool allowed=scheme&&(g_ascii_strcasecmp(scheme,"http")==0||g_ascii_strcasecmp(scheme,"https")==0);g_free(scheme);if(!allowed){done(vantage::agent_error(r.id,"invalid_params","url must use http or https"));return G_SOURCE_REMOVE;}
         auto method=vantage::json_param_string(r.params_json,"method");if(method.empty())method="GET";
         auto *message=soup_message_new(method.c_str(),url.c_str());if(!message){done(vantage::agent_error(r.id,"invalid_params","invalid URL or HTTP method"));return G_SOURCE_REMOVE;}
-        for(const auto&[name,value]:vantage::json_param_string_object(r.params_json,"headers")){if(name.empty()||name.find_first_of("\r\n")!=std::string::npos||value.find_first_of("\r\n")!=std::string::npos){g_object_unref(message);done(vantage::agent_error(r.id,"invalid_params","header names and values must not contain newlines"));return G_SOURCE_REMOVE;}soup_message_headers_replace(soup_message_get_request_headers(message),name.c_str(),value.c_str());}
-        auto body=vantage::json_param_string(r.params_json,"body");if(!body.empty()||vantage::json_value_kind(r.params_json,"body")=='s'){auto*bytes=g_bytes_new(body.data(),body.size());const char*content_type=soup_message_headers_get_one(soup_message_get_request_headers(message),"Content-Type");soup_message_set_request_body_from_bytes(message,content_type&&*content_type?content_type:"application/octet-stream",bytes);g_bytes_unref(bytes);}
+        std::optional<std::vector<std::pair<std::string,std::string>>> parsed_headers;
+        if(vantage::json_param_has(r.params_json,"headers")){
+            parsed_headers=vantage::json_param_string_object(r.params_json,"headers");
+            if(!parsed_headers){g_object_unref(message);done(vantage::agent_error(r.id,"invalid_params","headers must be an object of string values"));return G_SOURCE_REMOVE;}
+            for(const auto&[name,value]:*parsed_headers){if(name.empty()||name.find_first_of("\r\n")!=std::string::npos||value.find_first_of("\r\n")!=std::string::npos){g_object_unref(message);done(vantage::agent_error(r.id,"invalid_params","header names and values must not contain newlines"));return G_SOURCE_REMOVE;}soup_message_headers_replace(soup_message_get_request_headers(message),name.c_str(),value.c_str());}
+        }
+        auto body=vantage::json_param_string(r.params_json,"body");if(!body.empty()||vantage::json_value_kind(r.params_json,"body")=='s'){
+            auto*bytes=g_bytes_new(body.data(),body.size());
+            // Copy the Content-Type before setting the body: libsoup replaces the
+            // header in place, so passing a pointer into the same headers would
+            // free the value it is about to re-read (use-after-free / garbage).
+            std::string content_type_holder;
+            if(const char*ct=soup_message_headers_get_one(soup_message_get_request_headers(message),"Content-Type");ct&&*ct)content_type_holder=ct;
+            soup_message_set_request_body_from_bytes(message,content_type_holder.empty()?"application/octet-stream":content_type_holder.c_str(),bytes);
+            g_bytes_unref(bytes);
+        }
         auto timeout=std::clamp<long long>(vantage::json_param_integer(r.params_json,"timeout_ms",15000),1000,25000);auto max_bytes=static_cast<std::size_t>(std::clamp<long long>(vantage::json_param_integer(r.params_json,"max_bytes",1048576),1,4194304));
-        auto*session=soup_session_new_with_options("timeout",static_cast<guint>(std::max<long long>(1,(timeout+999)/1000)),nullptr);auto*state=new AgentFetchResult{r.id,std::move(done),SOUP_SESSION(g_object_ref(session)),SOUP_MESSAGE(g_object_ref(message)),max_bytes};soup_session_send_and_read_async(session,message,G_PRIORITY_DEFAULT,nullptr,agent_fetch_finished,state);g_object_unref(message);g_object_unref(session);return G_SOURCE_REMOVE;
+        auto*session=soup_session_new_with_options("timeout",static_cast<guint>(std::max<long long>(1,(timeout+999)/1000)),nullptr);auto*state=new AgentFetchResult{r.id,std::move(done),SOUP_MESSAGE(g_object_ref(message)),max_bytes,{},{},0};soup_session_send_async(session,message,G_PRIORITY_DEFAULT,nullptr,agent_fetch_send_ready,state);g_object_unref(message);g_object_unref(session);return G_SOURCE_REMOVE;
     }
     if (r.method == "page.screenshot") {
         auto*t=agent_tab(owner,static_cast<vantage::TabId>(vantage::json_param_integer(r.params_json,"tab_id")));if(!t){done(vantage::agent_error(r.id,"not_found","tab not found"));return G_SOURCE_REMOVE;}auto path=vantage::json_param_string(r.params_json,"path");if(path.empty()){done(vantage::agent_error(r.id,"invalid_params","path required"));return G_SOURCE_REMOVE;}auto region=vantage::json_param_bool(r.params_json,"full_page",false)?WEBKIT_SNAPSHOT_REGION_FULL_DOCUMENT:WEBKIT_SNAPSHOT_REGION_VISIBLE;webkit_web_view_get_snapshot(t->view,region,WEBKIT_SNAPSHOT_OPTIONS_NONE,nullptr,agent_snapshot_finished,new AgentSnapshotResult{r.id,std::move(done),path});return G_SOURCE_REMOVE;

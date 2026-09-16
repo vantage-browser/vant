@@ -122,6 +122,7 @@ test-agent-native: $(BUILD)/vant
 	@( ./$(BUILD)/vant > /tmp/vantage-agent-native.log 2>&1 & echo $$! > /tmp/vantage-agent-native.pid )
 	@sleep 3
 	@python3 tests/agent_native.py || { pkill -x vant; exit 1; }
+	@python3 tests/net_fetch.py || { pkill -x vant; exit 1; }
 	@pkill -x vant; true
 
 test: test-unit smoke
