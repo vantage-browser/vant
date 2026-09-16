@@ -69,8 +69,13 @@ Params: `url` (http/https only, required), `method` (default GET), `headers`
 (1000-25000, default 15000; a read/idle timeout, not a total deadline),
 `max_bytes` (1-4194304, default 1048576; bounds the retained response body).
 Result: `status`, `ok` (2xx), `url`, `headers`, `body`, `body_encoding`
-(`text` or `base64` for non-UTF-8), `truncated` and `bytes` (the full response
-size when known).
+(`text` or `base64` for non-UTF-8), `truncated` and `bytes`.
+
+`bytes` is the response body size as best known: the declared `Content-Length`
+when the response carries one, otherwise the number of body bytes actually
+read up to the `max_bytes` cap (so for an unknown-length/chunked response that
+was truncated, `bytes` equals the retained cap and the true full size is not
+reported). `truncated` is true when the response body exceeded `max_bytes`.
 
 Behavior: redirects are not auto-followed (a 3xx is returned with its
 `Location` header); no default `User-Agent` is sent; a bare `body` uses

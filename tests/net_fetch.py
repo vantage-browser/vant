@@ -16,6 +16,7 @@ import os
 import socket
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 SOCKET = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
@@ -84,6 +85,26 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(n))
             self.end_headers()
             self.wfile.write(b"x" * n)
+            return
+        if path == "/chunked":
+            # Unknown-length HTTP chunked response (no Content-Length) to
+            # exercise the bytes/truncation semantics for chunked bodies.
+            n = int(params.get("bytes", "2000"))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+            payload = b"z" * n
+            self.wfile.write(f"{len(payload):x}\r\n".encode() + payload + b"\r\n0\r\n\r\n")
+            return
+        if path == "/slow":
+            time.sleep(int(params.get("ms", "3000")) / 1000.0)
+            data = b"slow done"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
             return
         if path == "/utf8":
             # Raw UTF-8 bytes (not JSON-escaped) to prove text detection.
@@ -183,6 +204,18 @@ def main():
         require(r["bytes"] == 100 and not r["truncated"] and len(r["body"]) == 100,
                 "exact-fit body truncated=false")
 
+        # Unknown-length (chunked) responses: bytes is the retained cap when
+        # truncated (the full size is unknowable without reading the remainder).
+        r = fetch({"url": base + "/chunked?bytes=5000", "max_bytes": 100})
+        require(r["bytes"] == 100 and r["truncated"] and len(r["body"]) == 100,
+                "chunked > max_bytes: bytes=100 (retained cap), truncated=true")
+        r = fetch({"url": base + "/chunked?bytes=100", "max_bytes": 100})
+        require(r["bytes"] == 100 and not r["truncated"] and len(r["body"]) == 100,
+                "chunked == max_bytes: truncated=false, bytes=100")
+        r = fetch({"url": base + "/chunked?bytes=50", "max_bytes": 100})
+        require(r["bytes"] == 50 and not r["truncated"] and len(r["body"]) == 50,
+                "chunked < max_bytes: bytes=50, truncated=false")
+
         # Malformed input
         fetch({"url": base + "/echo", "headers": {"A": 1}}, expect_ok=False)
         fetch({"url": "file:///etc/passwd"}, expect_ok=False)
@@ -197,6 +230,13 @@ def main():
         r = fetch({"url": base + "/echo"})
         echo = json.loads(r["body"])
         require("Cookie" not in echo["received_headers"], "no Cookie header attached")
+
+        # timeout_ms is a read/idle timeout, not a total deadline
+        t0 = time.time()
+        err = fetch({"url": base + "/slow?ms=4000", "timeout_ms": 1000}, expect_ok=False)
+        elapsed = time.time() - t0
+        require(err["code"] == "fetch_error", "slow endpoint times out with fetch_error")
+        require(elapsed < 3.5, f"timeout fired promptly (elapsed {elapsed:.1f}s)")
 
         print("net.fetch regressions: PASS")
         return 0

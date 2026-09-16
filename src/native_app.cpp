@@ -3253,7 +3253,7 @@ std::string agent_describe_json(const std::string &name) {
         {"browser.forward", "{\"params\":{\"tab_id\":\"integer?\"},\"returns\":\"tab object\"}"},
         {"browser.cookies", "{\"params\":{\"tab_id\":\"integer?\",\"uri\":\"string?\"},\"returns\":\"cookie list scoped to the given or current URI\"}"},
         {"browser.profile", "{\"params\":{\"tab_id\":\"integer?\"},\"returns\":\"private and persistence metadata for the tab profile\"}"},
-        {"net.fetch", "{\"params\":{\"url\":\"string (http/https only)\",\"method\":\"string? (default GET)\",\"headers\":\"object<string,string>? (no default User-Agent; set one via headers if the target requires it)\",\"body\":\"string?\",\"timeout_ms\":\"integer? 1000-25000, read/idle timeout (not a total deadline)\",\"max_bytes\":\"integer? 1-4194304, retained body cap\"},\"returns\":\"status, ok, url, headers, body, body_encoding (text|base64), truncated, bytes; redirects are NOT auto-followed; browser cookies are NOT attached\"}"},
+        {"net.fetch", "{\"params\":{\"url\":\"string (http/https only)\",\"method\":\"string? (default GET)\",\"headers\":\"object<string,string>? (no default User-Agent; set one via headers if the target requires it)\",\"body\":\"string?\",\"timeout_ms\":\"integer? 1000-25000, read/idle timeout (not a total deadline)\",\"max_bytes\":\"integer? 1-4194304, retained body cap\"},\"returns\":\"status, ok, url, headers, body, body_encoding (text|base64), truncated, bytes; bytes is the declared Content-Length when present, else the bytes read up to max_bytes; redirects are NOT auto-followed; browser cookies are NOT attached\"}"},
         {"page.javascript", "{\"params\":{\"tab_id\":\"integer?\",\"script\":\"string\"},\"returns\":\"JSON-serialisable page value\"}"},
         {"page.snapshot", "{\"params\":{\"tab_id\":\"integer?\"},\"returns\":\"semantic element inventory with @e refs, generation and page metadata\"}"},
         {"page.interact", "{\"params\":{\"tab_id\":\"integer?\",\"ref\":\"string?\",\"selector\":\"string?\",\"action\":\"click|focus|fill|type|clear|select|check|uncheck|scroll|key\",\"value\":\"string?\"},\"returns\":\"{ok:true} or {ok:false,error:stale_or_missing|disabled|hidden}\"}"},
@@ -3328,7 +3328,8 @@ void agent_fetch_emit(AgentFetchResult *state, GInputStream *stream) {
     const gint64 content_length =
         soup_message_headers_get_content_length(soup_message_get_response_headers(state->message));
     const std::size_t bytes_total = content_length > 0
-        ? static_cast<std::size_t>(content_length) : state->bytes_total;
+        ? static_cast<std::size_t>(content_length)
+        : std::min(state->bytes_total, state->max_bytes);
     std::string encoding = "text";
     if (!state->body.empty() && !g_utf8_validate(state->body.data(), static_cast<gssize>(state->body.size()), nullptr)) {
         auto *encoded = g_base64_encode(reinterpret_cast<const guchar *>(state->body.data()), state->body.size());
