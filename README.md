@@ -20,6 +20,28 @@ JavaScript, semantic snapshots and interaction, screenshots and content
 inspection, WebKit/Vantage introspection, browser data/services, diagnostics
 and event streaming.
 
+## Using Vantage with AI agents
+
+`vant agent` is the semantic browser-control interface. Start Vantage (under
+Xvfb on a headless machine), then operate a page through its semantic
+snapshot/interact loop — no coordinate automation:
+
+```sh
+vant agent open http://127.0.0.1:7335
+vant agent snapshot                 # semantic inventory with @e references
+vant agent fill  @e4_17 user@example.com
+vant agent click @e4_19
+vant agent screenshot /tmp/page.png
+vant agent diagnostics              # console/JS-error ring
+```
+
+Prefer `page.interact`/`page.snapshot` for actually using websites;
+`page.javascript` is inspection/support, and `net.fetch` is HTTP/API tooling —
+not a substitute for rendered-browser dogfooding.
+
+Start here: [docs/AGENT-GUIDE.md](docs/AGENT-GUIDE.md). Full reference:
+[docs/AGENT-REFERENCE.md](docs/AGENT-REFERENCE.md).
+
 ## Install development dependencies
 
 ### Ubuntu 24.04 or newer
