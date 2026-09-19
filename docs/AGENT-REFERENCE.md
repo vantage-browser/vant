@@ -21,13 +21,15 @@ Methods: `browser.windows`, `browser.tabs`, `browser.window.new`, `browser.tab.n
 
 ## Arbitrary page JavaScript
 
-`page.javascript` evaluates arbitrary JavaScript in the selected live WebKit view. `vant agent js 'document.title'`, `vant agent js --file script.js`, and piping a script to `vant agent js -` are convenience forms. JSON-serialisable values are returned structurally; `undefined` maps to JSON `null`. JavaScript exceptions become structured `javascript_error` responses.
+`page.javascript` evaluates arbitrary JavaScript in the selected live WebKit view's page world (in contrast to the semantic recorder, which runs in Vantage's isolated `vantage-agent` world). `vant agent js 'document.title'`, `vant agent js --file script.js`, and piping a script to `vant agent js -` are convenience forms. JSON-serialisable values are returned structurally; `undefined` maps to JSON `null`. JavaScript exceptions become structured `javascript_error` responses. Because `page.javascript` runs as page JavaScript, a page with a strict CSP can reject `eval`-based evaluation; use the semantic operations (which run in the isolated world) for driving the page, and reserve `page.javascript` for inspection on pages that allow it.
 
 This execution is initiated by the trusted Vantage application against the page. It does not inject Vantage RPC, filesystem/process APIs or privileged JS++ host objects into the page. Main-frame evaluation is implemented first; explicit subframe/world targeting remains capability-versioned where WebKitGTK exposes a suitable stable application API.
 
 ## Semantic snapshots
 
 `page.snapshot` returns a compact semantic inventory of up to 500 interactive elements with role, accessible-ish name/text, visibility/state and references such as `@e4_17`. The first number is the page's semantic generation. A MutationObserver invalidates all references whenever the DOM mutates; a new snapshot creates fresh refs. Vantage never silently retargets a stale ref to a different element.
+
+The semantic recorder runs in a named isolated world (`vantage-agent`) that shares the page's DOM and resources but is not subject to the page's Content Security Policy, so semantic snapshot/interact/inspect/diagnostics keep working on pages that set a strict `script-src 'self'` CSP (which would otherwise block the recorder's `eval`-based evaluation). This is the same model as an extension content script: the page cannot see or call the recorder's world, and page JavaScript cannot reach Vantage objects through it.
 
 The initial semantic extractor covers native interactive controls, ARIA-role elements, contenteditable and tabindex targets. Shadow DOM and cross-origin iframe depth are reported as current limitations rather than bypassing WebKit's page-origin rules.
 
