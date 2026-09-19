@@ -151,6 +151,8 @@ struct ApplicationState {
     bool fullscreen{};
     bool app_mode{};
     bool private_mode{};
+    bool tab_probe{};
+    int probe_tab_count{6};
     WebKitNetworkSession *network_session{};
     TabState *dragging_tab{};
     TabState *pending_tab_detach{};
@@ -1441,19 +1443,98 @@ gboolean load_failed(WebKitWebView *view, WebKitLoadEvent, const char *failing_u
     return TRUE;
 }
 
-void update_tab_widths(WindowState *state) {
-    if (!state->tab_strip || state->tabs.empty()) return;
-    const int strip_width = gtk_widget_get_width(state->tab_strip);
-    const int measured_new_tab_width = state->new_tab_button ? gtk_widget_get_width(state->new_tab_button) : 0;
-    const int new_tab_width = measured_new_tab_width > 0 ? measured_new_tab_width : 32;
-    if (strip_width <= new_tab_width) return;
-    const int available = std::max(1, strip_width - new_tab_width - state->tab_drop_width - 4);
-    const int width = std::min(184, std::max(1, available / static_cast<int>(state->tabs.size())));
-    for (const auto &tab : state->tabs) gtk_widget_set_size_request(tab->tab, width, 38);
+// Tab sizing model.
+//
+// Each browser tab reports two distinct widths to GTK:
+//   * a small MINIMUM width, so that the tab strip and therefore the window
+//     are never locked to a huge width by the tabs' measurement;
+//   * a NATURAL/preferred width of 184px.
+//
+// A custom GtkLayoutManager on the tab box decides the actual per-tab width
+// from the allocation it receives: while there is room for every tab at its
+// natural width the tabs stay at 184px; as soon as the available width drops
+// below tabs * 184px the same equal distribution compresses every tab down to
+// the minimum. Adding tabs and narrowing the window therefore exercise the
+// same code path. The "+" button and the window controls are siblings of the
+// tab box, so they keep their own natural widths and are never compressed.
+constexpr int kTabMinimumWidth = 96;
+constexpr int kTabNaturalWidth = 184;
+constexpr int kTabHeight = 38;
+
+WindowState *tab_box_state(GtkWidget *widget) {
+    return static_cast<WindowState *>(g_object_get_data(G_OBJECT(widget), "vantage-window-state"));
 }
 
-void tab_strip_width_changed(GObject *, GParamSpec *, WindowState *state) {
-    update_tab_widths(state);
+GtkSizeRequestMode tab_box_request_mode(GtkWidget *) {
+    return GTK_SIZE_REQUEST_CONSTANT_SIZE;
+}
+
+void tab_box_measure(GtkWidget *widget, GtkOrientation orientation, int,
+                     int *minimum, int *natural, int *minimum_baseline, int *natural_baseline) {
+    auto *state = tab_box_state(widget);
+    *minimum = 0;
+    *natural = 0;
+    *minimum_baseline = -1;
+    *natural_baseline = -1;
+    for (GtkWidget *child = gtk_widget_get_first_child(widget); child;
+         child = gtk_widget_get_next_sibling(child)) {
+        if (state && child == state->tab_drop_placeholder) {
+            int child_min = 0, child_nat = 0, child_min_base = -1, child_nat_base = -1;
+            gtk_widget_measure(child, orientation, -1, &child_min, &child_nat,
+                &child_min_base, &child_nat_base);
+            if (orientation == GTK_ORIENTATION_HORIZONTAL) {
+                *minimum += child_min;
+                *natural += child_nat;
+            } else {
+                *minimum = std::max(*minimum, child_min);
+                *natural = std::max(*natural, child_nat);
+            }
+            continue;
+        }
+        if (orientation == GTK_ORIENTATION_HORIZONTAL) {
+            *minimum += kTabMinimumWidth;
+            *natural += kTabNaturalWidth;
+        } else {
+            *minimum = std::max(*minimum, kTabHeight);
+            *natural = std::max(*natural, kTabHeight);
+        }
+    }
+}
+
+void tab_box_allocate(GtkWidget *widget, int width, int height, int) {
+    if (width < 1 || height < 1) return;
+    auto *state = tab_box_state(widget);
+    int placeholder_width = 0;
+    int tab_count = 0;
+    for (GtkWidget *child = gtk_widget_get_first_child(widget); child;
+         child = gtk_widget_get_next_sibling(child)) {
+        if (state && child == state->tab_drop_placeholder) {
+            int child_min = 0, child_nat = 0;
+            gtk_widget_measure(child, GTK_ORIENTATION_HORIZONTAL, -1,
+                &child_min, &child_nat, nullptr, nullptr);
+            placeholder_width = child_nat;
+        } else {
+            ++tab_count;
+        }
+    }
+    int tab_width = kTabNaturalWidth;
+    if (tab_count > 0) {
+        const int available = std::max(0, width - placeholder_width);
+        if (available < tab_count * kTabNaturalWidth) {
+            // Progressively compress. The layout's reported minimum is
+            // tabs * kTabMinimumWidth, so in normal operation the allocation
+            // never drops below that; allowing a slight further squeeze here
+            // simply avoids overflow during a drag placeholder animation or
+            // when tabs are added beyond the strip's capacity.
+            tab_width = std::max(1, available / tab_count);
+        }
+    }
+    for (GtkWidget *child = gtk_widget_get_first_child(widget); child;
+         child = gtk_widget_get_next_sibling(child)) {
+        const int child_width = (state && child == state->tab_drop_placeholder)
+            ? placeholder_width : tab_width;
+        gtk_widget_allocate(child, child_width, height, -1, nullptr);
+    }
 }
 
 void select_tab(TabState *tab) {
@@ -1603,7 +1684,6 @@ void close_tab(TabState *tab) {
     } else if (was_active) {
         select_tab(state->tabs[std::min(index, state->tabs.size() - 1)].get());
     }
-    update_tab_widths(state);
 }
 
 void reopen_closed_tab(WindowState *state) {
@@ -1664,7 +1744,6 @@ bool move_tab_to_window(TabState *tab, WindowState *target, std::size_t destinat
         source->tabs.insert(source->tabs.begin() + static_cast<std::ptrdiff_t>(destination), std::move(owned));
         GtkWidget *previous = destination == 0 ? nullptr : source->tabs[destination - 1]->tab;
         gtk_box_reorder_child_after(GTK_BOX(source->tab_box), tab->tab, previous);
-        update_tab_widths(source);
         return true;
     }
 
@@ -1691,7 +1770,6 @@ bool move_tab_to_window(TabState *tab, WindowState *target, std::size_t destinat
     g_object_unref(tab->page);
     g_object_unref(tab->tab);
     select_tab(tab);
-    update_tab_widths(target);
 
     if (source->tabs.empty()) {
         source->view = nullptr;
@@ -1699,7 +1777,6 @@ bool move_tab_to_window(TabState *tab, WindowState *target, std::size_t destinat
     } else if (was_active) {
         select_tab(source->tabs[std::min(source_index, source->tabs.size() - 1)].get());
     }
-    update_tab_widths(source);
     return true;
 }
 
@@ -1777,7 +1854,6 @@ gboolean expand_tab_drop_placeholder(void *data) {
     auto *state = static_cast<WindowState *>(data);
     state->tab_drop_width = std::min(state->tab_drop_width + 6, 30);
     gtk_widget_set_size_request(state->tab_drop_placeholder, state->tab_drop_width, -1);
-    update_tab_widths(state);
     if (state->tab_drop_width < 30) return G_SOURCE_CONTINUE;
     state->tab_drop_animation = 0;
     return G_SOURCE_REMOVE;
@@ -1792,7 +1868,6 @@ void clear_tab_drop_placeholder(WindowState *state) {
     state->tab_drop_width = 0;
     gtk_widget_set_size_request(state->tab_drop_placeholder, 0, -1);
     gtk_widget_set_visible(state->tab_drop_placeholder, FALSE);
-    update_tab_widths(state);
 }
 
 void show_tab_drop_placeholder(WindowState *state, std::size_t destination) {
@@ -2599,7 +2674,7 @@ TabState *new_tab(WindowState *state, const std::string &uri, bool load_initial)
     tab->tab = gtk_overlay_new();
     gtk_widget_add_css_class(tab->tab, "browser-tab");
     gtk_widget_set_hexpand(tab->tab, FALSE);
-    gtk_widget_set_size_request(tab->tab, 184, 38);
+    gtk_widget_set_size_request(tab->tab, kTabMinimumWidth, kTabHeight);
     tab->backdrop = gtk_drawing_area_new();
     gtk_widget_set_hexpand(tab->backdrop, TRUE);
     gtk_widget_set_halign(tab->backdrop, GTK_ALIGN_FILL);
@@ -2677,7 +2752,6 @@ TabState *new_tab(WindowState *state, const std::string &uri, bool load_initial)
         G_CALLBACK(find_counted), state);
 
     state->tabs.push_back(std::move(owned));
-    update_tab_widths(state);
     select_tab(tab);
     auto *session = webkit_web_view_get_network_session(tab->view);
     auto *data_manager = webkit_network_session_get_website_data_manager(session);
@@ -2695,6 +2769,113 @@ TabState *new_tab(WindowState *state, const std::string &uri, bool load_initial)
 gboolean finish_smoke(void *data) {
     auto *state = static_cast<WindowState *>(data);
     g_application_quit(G_APPLICATION(state->application));
+    return G_SOURCE_REMOVE;
+}
+
+// --tab-sizing-probe: exercises the live tab layout and reports the measured
+// window/tab-strip minimums plus the tab widths actually allocated at several
+// window widths. Used by tests/tab_sizing.py as a regression test for the tab
+// sizing model (minimum width must stay small while natural width is 184px).
+void pump_layout(GtkWidget *widget, int rounds = 40) {
+    for (int round = 0; round < rounds; ++round) {
+        while (g_main_context_iteration(nullptr, FALSE)) {}
+        gdk_display_flush(gtk_widget_get_display(widget));
+        g_usleep(10000);
+    }
+}
+
+// Optional VANT_TAB_PROBE_SHOT=<dir> captures renderings of the live window at
+// its natural and minimum widths for visual inspection of tab compression.
+void save_window_shot(WindowState *state, const char *path) {
+    auto *paintable = gtk_widget_paintable_new(state->window);
+    auto *snapshot = gtk_snapshot_new();
+    gdk_paintable_snapshot(paintable, snapshot,
+        gtk_widget_get_width(state->window), gtk_widget_get_height(state->window));
+    auto *node = gtk_snapshot_free_to_node(snapshot);
+    g_object_unref(paintable);
+    if (!node) return;
+    auto *renderer = gsk_renderer_new_for_surface(
+        gtk_native_get_surface(GTK_NATIVE(state->window)));
+    const graphene_rect_t bounds = {
+        0, 0,
+        static_cast<float>(gtk_widget_get_width(state->window)),
+        static_cast<float>(gtk_widget_get_height(state->window)),
+    };
+    auto *texture = gsk_renderer_render_texture(renderer, node, &bounds);
+    if (texture) {
+        gdk_texture_save_to_png(texture, path);
+        g_object_unref(texture);
+    }
+    gsk_renderer_unrealize(renderer);
+    g_object_unref(renderer);
+    gsk_render_node_unref(node);
+}
+
+gboolean tab_sizing_probe(void *data) {
+    auto *state = static_cast<WindowState *>(data);
+    auto *owner = state->owner;
+    const char *shot_dir = g_getenv("VANT_TAB_PROBE_SHOT");
+    while (static_cast<int>(state->tabs.size()) < owner->probe_tab_count)
+        new_tab(state, "vantage:new");
+    pump_layout(state->window);
+
+    int win_min = 0, win_nat = 0;
+    gtk_widget_measure(state->window, GTK_ORIENTATION_HORIZONTAL, -1,
+        &win_min, &win_nat, nullptr, nullptr);
+    int strip_min = 0, strip_nat = 0;
+    gtk_widget_measure(state->tab_strip, GTK_ORIENTATION_HORIZONTAL, -1,
+        &strip_min, &strip_nat, nullptr, nullptr);
+    std::cout << "tab_probe tabs=" << state->tabs.size()
+              << " window_min=" << win_min << " window_natural=" << win_nat
+              << " strip_min=" << strip_min << " strip_natural=" << strip_nat << '\n';
+
+    const auto dump_tabs = [&]() {
+        std::cout << "tab_probe resize window_w=" << gtk_widget_get_width(state->window);
+        for (const auto &tab : state->tabs) std::cout << " " << gtk_widget_get_width(tab->tab);
+        std::cout << '\n';
+    };
+
+    std::vector<int> widths = {
+        std::max(win_nat, owner->probe_tab_count * kTabNaturalWidth),
+        owner->probe_tab_count * kTabNaturalWidth,
+        900, 800, 700, 600, 480,
+        std::max(160, strip_min),
+    };
+    std::sort(widths.rbegin(), widths.rend());
+    widths.erase(std::unique(widths.begin(), widths.end()), widths.end());
+    for (const int w : widths) {
+        gtk_window_set_default_size(GTK_WINDOW(state->window), w, 700);
+        pump_layout(state->window, 8);
+        dump_tabs();
+        if (shot_dir && *shot_dir) {
+            std::string path = std::string(shot_dir) + "/vant-wide-" +
+                std::to_string(w) + ".png";
+            save_window_shot(state, path.c_str());
+        }
+    }
+    if (shot_dir && *shot_dir) {
+        gtk_window_set_default_size(GTK_WINDOW(state->window), strip_min, 700);
+        pump_layout(state->window, 8);
+        save_window_shot(state, (std::string(shot_dir) + "/vant-narrow.png").c_str());
+    }
+
+    // Tab creation and closing while the strip is compressed must follow the
+    // same equal-distribution path as a plain resize.
+    gtk_window_set_default_size(GTK_WINDOW(state->window), 800, 700);
+    pump_layout(state->window, 8);
+    new_tab(state, "vantage:new");
+    pump_layout(state->window, 8);
+    std::cout << "tab_probe after_add window_w=" << gtk_widget_get_width(state->window);
+    for (const auto &tab : state->tabs) std::cout << " " << gtk_widget_get_width(tab->tab);
+    std::cout << '\n';
+    close_tab(state->tabs.back().get());
+    pump_layout(state->window, 8);
+    std::cout << "tab_probe after_close window_w=" << gtk_widget_get_width(state->window);
+    for (const auto &tab : state->tabs) std::cout << " " << gtk_widget_get_width(tab->tab);
+    std::cout << '\n';
+
+    g_application_quit(G_APPLICATION(owner->application));
+    std::cout.flush();
     return G_SOURCE_REMOVE;
 }
 
@@ -2924,6 +3105,9 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     state->tab_strip = tab_strip;
     gtk_widget_add_css_class(tab_strip, "tab-strip");
     state->tab_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    g_object_set_data(G_OBJECT(state->tab_box), "vantage-window-state", state);
+    gtk_widget_set_layout_manager(state->tab_box,
+        gtk_custom_layout_new(tab_box_request_mode, tab_box_measure, tab_box_allocate));
     state->tab_drop_placeholder = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
     gtk_widget_add_css_class(state->tab_drop_placeholder, "tab-drop-placeholder");
     gtk_widget_set_halign(state->tab_drop_placeholder, GTK_ALIGN_CENTER);
@@ -2967,7 +3151,6 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     auto *window_controls = gtk_window_controls_new(GTK_PACK_END);
     gtk_widget_set_valign(window_controls, GTK_ALIGN_CENTER);
     gtk_box_append(GTK_BOX(header_row), window_controls);
-    g_signal_connect(tab_strip, "notify::width", G_CALLBACK(tab_strip_width_changed), state);
     auto *header_middle = gtk_gesture_click_new();
     gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(header_middle), GDK_BUTTON_MIDDLE);
     gtk_gesture_single_set_exclusive(GTK_GESTURE_SINGLE(header_middle), TRUE);
@@ -3616,6 +3799,8 @@ void activate(GtkApplication *application, void *user_data) {
     owner->application = application;
     create_window(owner, owner->initial_uri, owner->smoke, nullptr, owner->private_mode);
     owner->smoke = false;
+    if (owner->tab_probe && !owner->windows.empty())
+        g_idle_add(tab_sizing_probe, owner->windows.front().get());
 }
 
 } // namespace
@@ -3631,7 +3816,9 @@ std::string native_versions() {
 
 int run_native(const NativeLaunchOptions &options) {
     auto application = std::unique_ptr<GtkApplication, decltype(&g_object_unref)>(
-        gtk_application_new("cv.vantage_browser.Vantage", G_APPLICATION_DEFAULT_FLAGS), &g_object_unref);
+        gtk_application_new("cv.vantage_browser.Vantage",
+            options.smoke || options.tab_probe ? G_APPLICATION_NON_UNIQUE : G_APPLICATION_DEFAULT_FLAGS),
+        &g_object_unref);
     ApplicationState state;
     state.application = application.get();
     state.initial_uri = options.initial_uri;
@@ -3639,7 +3826,8 @@ int run_native(const NativeLaunchOptions &options) {
     state.fullscreen = options.fullscreen;
     state.app_mode = options.app_mode;
     state.private_mode = options.private_mode;
-    if (options.smoke) {
+    state.tab_probe = options.tab_probe;
+    if (options.smoke || options.tab_probe) {
         state.network_session = webkit_network_session_new_ephemeral();
     } else {
         const auto web_data = std::filesystem::path(g_get_user_data_dir()) /
@@ -3652,7 +3840,8 @@ int run_native(const NativeLaunchOptions &options) {
             web_data.c_str(), web_cache.c_str());
     }
     state.data = std::make_unique<UserDataStore>(
-        std::filesystem::path(g_get_user_data_dir()) / "vantage-browser" / "browser.sqlite3", options.smoke);
+        std::filesystem::path(g_get_user_data_dir()) / "vantage-browser" / "browser.sqlite3",
+        options.smoke || options.tab_probe);
     state.data->reconcile_downloads();
     state.agent_rpc = std::make_unique<AgentRpcServer>([&state](AgentRequest request, AgentReply reply) { handle_agent_request(&state, std::move(request), std::move(reply)); });
     std::string agent_error_message;

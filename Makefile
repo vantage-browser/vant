@@ -16,7 +16,7 @@ JSPP_DIR := third_party/jspp
 JSPP_SOURCES := $(filter-out $(JSPP_DIR)/src/main.cpp,$(wildcard $(JSPP_DIR)/src/*.cpp))
 JSPP_OBJECTS := $(JSPP_SOURCES:$(JSPP_DIR)/src/%.cpp=$(BUILD)/jspp/%.o)
 
-.PHONY: all deps test test-unit test-sanitize smoke smoke-native benchmark evidence vendor-check vendor-integrity clean
+.PHONY: all deps test test-unit test-sanitize smoke smoke-native test-tab-sizing benchmark evidence vendor-check vendor-integrity clean
 all: deps $(BUILD)/vant
 
 deps:
@@ -114,6 +114,10 @@ smoke: $(BUILD)/vant
 
 smoke-native: $(BUILD)/vant
 	env WEBKIT_DISABLE_COMPOSITING_MODE=1 ./$(BUILD)/vant --native-smoke
+	env WEBKIT_DISABLE_COMPOSITING_MODE=1 python3 tests/tab_sizing.py ./$(BUILD)/vant
+
+test-tab-sizing: $(BUILD)/vant
+	env WEBKIT_DISABLE_COMPOSITING_MODE=1 python3 tests/tab_sizing.py ./$(BUILD)/vant
 
 test-agent-native: $(BUILD)/vant
 	@command -v pkill >/dev/null 2>&1 || { echo "error: pkill required for test-agent-native"; exit 1; }

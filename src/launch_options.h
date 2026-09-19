@@ -13,6 +13,7 @@ struct NativeLaunchOptions {
     bool fullscreen{};
     bool app_mode{};
     bool private_mode{};
+    bool tab_probe{};
     std::string initial_uri{"vantage:new"};
 };
 

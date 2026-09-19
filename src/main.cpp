@@ -20,7 +20,7 @@ void usage(std::ostream &out) {
         << "       vant --app=URL [--fullscreen]\n"
         << "       vant settings video-rendering [compatibility|accelerated]\n"
         << "       vant agent <status|version|capabilities|call> ...\n"
-        << "       vant [--headless-smoke|--native-probe|--native-smoke|--version|--help]\n";
+        << "       vant [--headless-smoke|--native-probe|--native-smoke|--tab-sizing-probe|--version|--help]\n";
 }
 }
 
@@ -62,6 +62,8 @@ int main(int argc, char **argv) {
     }
     if (argc == 2 && std::string_view(argv[1]) == "--native-smoke")
         return vantage::run_native({.smoke = true});
+    if (argc == 2 && std::string_view(argv[1]) == "--tab-sizing-probe")
+        return vantage::run_native({.tab_probe = true});
     if (argc == 2 && std::string_view(argv[1]) == "--native-probe") {
         std::cout << vantage::native_versions() << '\n';
         return 0;
