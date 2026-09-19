@@ -79,6 +79,11 @@ def parse_probe(output):
                 "kind": "positions",
                 "x": [int(t) for t in fields[2:]],
             })
+        elif fields[1].startswith("webview_bg"):
+            rows.append({
+                "kind": "webview_bg",
+                "hex": fields[1].split("=", 1)[1],
+            })
         else:
             rows.append({
                 "kind": "resize" if fields[1] == "resize" else
@@ -129,6 +134,16 @@ def main():
     require(all(b > a for a, b in zip(xs, xs[1:])),
             f"tab x positions strictly increase so tabs are side by side, "
             f"not stacked ({xs})")
+
+    # A freshly created tab's webview background must be dark. WebKitGTK
+    # defaults it to opaque white, which flashes before the (dark) page HTML
+    # renders when a tab is opened.
+    bg = [r for r in rows if r["kind"] == "webview_bg"]
+    require(len(bg) == 1, "probe reports the webview background color")
+    require(len(bg[0]["hex"]) == 6, f"webview background is a hex color ({bg[0]['hex']})")
+    channels = [int(bg[0]["hex"][i:i + 2], 16) for i in (0, 2, 4)]
+    require(max(channels) < 128,
+            f"webview background is dark, not white (rgb={channels})")
 
     # The widest row (>= natural) must hold every tab at exactly 184px.
     widest = max(resizes, key=lambda r: r["window_w"])

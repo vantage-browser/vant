@@ -2664,6 +2664,15 @@ TabState *new_tab(WindowState *state, const std::string &uri, bool load_initial)
         ? WEBKIT_WEB_VIEW(g_object_new(WEBKIT_TYPE_WEB_VIEW, "network-session", state->private_session, nullptr))
         : WEBKIT_WEB_VIEW(g_object_new(WEBKIT_TYPE_WEB_VIEW, "network-session",
               state->owner->network_session, nullptr));
+    // The webview's default background is opaque white, which flashes before
+    // the (dark) page HTML has rendered whenever a tab is shown. Paint the
+    // view with the window's dark background so that moment is dark instead of
+    // white; the page's own background then paints once the document draws.
+    // A fully transparent color is not used because WebKitGTK treats a
+    // zero-alpha background as "the page owns the background" and keeps white.
+    GdkRGBA view_background;
+    gdk_rgba_parse(&view_background, "rgb(23,23,22)");
+    webkit_web_view_set_background_color(tab->view, &view_background);
     g_signal_connect(tab->view, "script-dialog", G_CALLBACK(on_script_dialog), nullptr);
     // Capture page diagnostics from document start without exposing any native
     // Vantage object into the page world.
@@ -2839,6 +2848,17 @@ gboolean tab_sizing_probe(void *data) {
     std::cout << "tab_probe tabs=" << state->tabs.size()
               << " window_min=" << win_min << " window_natural=" << win_nat
               << " strip_min=" << strip_min << " strip_natural=" << strip_nat << '\n';
+
+    // The webview background must stay dark so a freshly created tab never
+    // flashes white before its page renders.
+    GdkRGBA webview_background;
+    webkit_web_view_get_background_color(state->tabs.front()->view, &webview_background);
+    std::cout << "tab_probe webview_bg="
+              << std::hex << std::setfill('0') << std::setw(2)
+              << static_cast<int>(webview_background.red * 255)
+              << std::setw(2) << static_cast<int>(webview_background.green * 255)
+              << std::setw(2) << static_cast<int>(webview_background.blue * 255)
+              << std::dec << '\n';
 
     std::cout << "tab_probe positions";
     for (const auto &tab : state->tabs) {
