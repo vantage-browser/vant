@@ -71,6 +71,18 @@ def main():
     require(diag.get("ok") and "responsive" in diag["result"],
             "page.native_diagnostics reports responsive state")
 
+    # A synchronous window.prompt() must not block the page: the semantic
+    # agent auto-dismisses script dialogs (like a headless browser), so the
+    # evaluation returns promptly with the default text instead of hanging
+    # every later page.* call. Without the script-dialog handler this would
+    # time out and the tab would stay blocked.
+    prompt_reply = call("page.javascript", {"tab_id": tab, "script": "prompt('x')"})
+    require(prompt_reply.get("ok"), "page.javascript evaluating prompt() returns")
+    require(prompt_reply.get("result") in ("", "null"),
+            f"prompt() auto-dismisses to empty/null (got {prompt_reply.get('result')!r})")
+    post_prompt = call("page.snapshot", {"tab_id": tab})
+    require(post_prompt.get("ok"), "page.snapshot still usable after prompt()")
+
     print("agent native regressions: PASS")
     return 0
 

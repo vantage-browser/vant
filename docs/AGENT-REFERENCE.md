@@ -37,6 +37,8 @@ The initial semantic extractor covers native interactive controls, ARIA-role ele
 
 `page.interact` accepts `action` plus either a semantic `ref` or CSS `selector`. Actions are `click`, `focus`, `fill`, `type`, `clear`, `select`, `check`, `uncheck`, `scroll`, and `key`. Ref lookup never falls back to a different element after invalidation. Interactions return `{ok:true}` or `{ok:false,error:stale_or_missing|disabled|hidden}`; hidden refers to an element that renders no box (for example `display:none`). `page.wait` polls without blocking GTK/WebKit for a selector, current semantic ref, or visible body text, with `timeout_ms` bounded to 30 seconds.
 
+Synchronous JavaScript dialogs (`window.alert`, `confirm`, `prompt`) are auto-dismissed rather than shown: the trusted agent context cannot click a native dialog, and a page blocked on `prompt()` would otherwise hang every subsequent semantic operation. This matches headless-browser behaviour (for example Chromium's `--disable-javascript-dialogs`). `confirm()`/`alert()` resolve as dismissed (false), and `prompt()` resolves to the default text (or an empty string when there is none), which callers conventionally treat as cancel.
+
 ## Rendered and content inspection
 
 `page.screenshot` writes a PNG directly to a caller-selected filesystem path. `full_page:false` captures the visible WebKit region; `full_page:true` requests the full document through WebKit's snapshot API. Binary image data is never embedded in JSON.

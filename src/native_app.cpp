@@ -2540,6 +2540,30 @@ void enforce_address_direction(GObject *, GParamSpec *, GtkWidget *address) {
     gtk_entry_set_alignment(GTK_ENTRY(address), 0.0f);
 }
 
+// Auto-dismiss JavaScript dialogs (alert/confirm/prompt). A synchronous
+// window.prompt()/alert()/confirm() blocks the page's main thread until the
+// user answers, which would hang the semantic agent (every page.evaluate
+// would time out). Returning TRUE from the script-dialog signal is the
+// standard headless-browser behaviour (equivalent to Chromium's
+// --disable-javascript-dialogs / Playwright dialog auto-dismiss): the dialog
+// is dismissed immediately so the page can continue. A prompt() then returns
+// the default text (or empty when none), which callers treat as cancel.
+gboolean on_script_dialog(WebKitWebView *, WebKitScriptDialog *dialog) {
+    switch (webkit_script_dialog_get_dialog_type(dialog)) {
+    case WEBKIT_SCRIPT_DIALOG_PROMPT: {
+        const char *def = webkit_script_dialog_prompt_get_default_text(dialog);
+        webkit_script_dialog_prompt_set_text(dialog, def ? def : "");
+        break;
+    }
+    case WEBKIT_SCRIPT_DIALOG_CONFIRM:
+    case WEBKIT_SCRIPT_DIALOG_ALERT:
+    case WEBKIT_SCRIPT_DIALOG_BEFORE_UNLOAD_CONFIRM:
+        webkit_script_dialog_confirm_set_confirmed(dialog, FALSE);
+        break;
+    }
+    return TRUE;
+}
+
 TabState *new_tab(WindowState *state, const std::string &uri, bool load_initial) {
     if (state->app_mode && !state->tabs.empty()) {
         create_window(state->owner, uri, false, state, state->private_mode);
@@ -2554,6 +2578,7 @@ TabState *new_tab(WindowState *state, const std::string &uri, bool load_initial)
         ? WEBKIT_WEB_VIEW(g_object_new(WEBKIT_TYPE_WEB_VIEW, "network-session", state->private_session, nullptr))
         : WEBKIT_WEB_VIEW(g_object_new(WEBKIT_TYPE_WEB_VIEW, "network-session",
               state->owner->network_session, nullptr));
+    g_signal_connect(tab->view, "script-dialog", G_CALLBACK(on_script_dialog), nullptr);
     // Capture page diagnostics from document start without exposing any native
     // Vantage object into the page world.
     auto *agent_script = webkit_user_script_new_for_world(agent_diagnostics_script,
