@@ -25,4 +25,4 @@ jobs:
       - name: Sanitizers
         run: make test-sanitize
       - name: Verify version command
-        run: test "$(./build/vant --version)" = "Vantage Browser 0.1.3"
+        run: test "$(./build/vant --version)" = "Vantage Browser 0.1.4"

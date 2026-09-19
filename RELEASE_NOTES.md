@@ -1,54 +1,56 @@
-# Vantage Browser v0.1.3
+# Vantage Browser v0.1.4
 
-Vantage Browser v0.1.3 builds on the v0.1.2 release with a direct agent HTTP
-surface and a re-vendored, release-provenanced JS++ dependency. Agent protocol
-1 remains **stable** and unchanged.
+Vantage Browser v0.1.4 builds on the v0.1.3 release with a corrected tab
+sizing model, fixes for newly opened tabs, a dark new-tab background, and two
+agent robustness fixes. Agent protocol 1 remains **stable** and unchanged.
 
-## Agent HTTP (net.fetch)
+## Tab sizing
 
-Trusted local agents can now make direct HTTP/API requests through
-`vant agent fetch`, application-side and separate from page work:
+Newly opened tabs now report a small GTK minimum width (96px) and a natural
+(preferred) width of 184px. Previously each tab's current width was set as a
+GTK minimum-size request, so GTK derived a minimum window width of roughly
+`tabs * 184 + chrome` and the window manager refused to shrink the window
+below it — the browser could not be resized narrower once enough tabs were
+open. With the corrected measurement model the window can shrink down to
+`tabs * 96 + chrome`: while there is room every tab stays at 184px, and as the
+strip runs out of space the tabs compress together uniformly. Adding tabs and
+narrowing the window follow the same layout path, the `+` button and the
+window controls are never compressed as though they were tabs, and tab titles
+continue to ellipsize normally.
 
-```sh
-vant agent fetch https://api.example.com/status
-vant agent fetch https://api.example.com/items '{"method":"POST","headers":{"Content-Type":"application/json"},"body":"{\"name\":\"demo\"}"}'
-```
+Also fixed a related layout bug where the custom tab layout allocated width to
+every tab but positioned them all at the same origin, stacking them on top of
+each other: space was reserved but only the first tab was visible or
+clickable. Tabs are now laid out side by side.
 
-`net.fetch` accepts `url` (http/https only), `method`, arbitrary `headers`, an
-exact `body`, a read/idle `timeout_ms`, and a `max_bytes` retained-body cap. It
-returns `status`, `ok`, `url`, `headers`, `body`, `body_encoding`
-(`text`/`base64`), `truncated` and `bytes`. Redirects are not auto-followed
-(3xx responses are returned with their `Location` header), browser cookies and
-session state are never attached, and TLS verification is unchanged. The
-schema is discoverable through `vant agent call describe '{"name":"net.fetch"}'`.
+## New-tab flash
 
-This surface was independently reviewed after the initial implementation. The
-review found and fixed genuine defects: a native `-Werror` build failure, a
-request `Content-Type` lifetime/use-after-free that corrupted the header on
-the wire, silent loss of malformed header objects, ineffective response-memory
-bounding, incomplete JSON `\uXXXX` decoding, and ambiguous `bytes` reporting
-for unknown-length responses. A deterministic local-HTTP regression suite
-(`tests/net_fetch.py`) now covers methods, headers, bodies, the
-`Content-Type` regression, 404/500 handling, redirects, UTF-8, binary/base64,
-bounded truncation (including chunked bodies), timeout behavior, malformed
-input, scheme/header-injection rejection and cookie isolation.
+Opening a new tab no longer flashes white. WebKitWebView paints an opaque
+white background by default, so the page area flashed white in the instant
+before the dark new-tab page rendered. Tab webviews are now painted with the
+window's dark background, which the page's own background replaces once the
+document draws.
 
-## Vendored JS++ provenance
+A live `--tab-sizing-probe` and its regression suite (`tests/tab_sizing.py`)
+verify the tab measurement/compression contract, the per-tab positions, and
+the dark webview background. The probe drives a real window and asserts the
+window minimum stays below `tabs * 184`, tabs hold 184px when there is room,
+compress uniformly as the window shrinks, floor at 96px at the minimum, stay
+side by side (never stacked), and keep a dark background.
 
-The vendored JS++ dependency was updated to the released **JS++ v0.0.1**
-(`8885f56`, tag `v0.0.1`) via the repository's vendoring mechanism, and
-`vendor-check` now certifies release-vendor consistency against the sibling's
-latest applicable release tag rather than a development `HEAD`.
-`vendor-integrity` remains the independent content/checksum verification.
+## Agent robustness
+
+- Page snapshots, inspections, interactions and diagnostics now run in a
+  dedicated isolated world, so pages that set a strict `script-src` Content
+  Security Policy remain drivable.
+- JavaScript `alert()`, `confirm()` and `prompt()` dialogs are auto-dismissed
+  (the standard headless-browser behaviour), so a page that calls them
+  synchronously can no longer hang every later semantic operation.
 
 ## Documentation
 
-The repository reference and the public website were updated for `net.fetch`
-and the corrected review findings, including the precise `bytes` semantics for
-unknown-length/chunked responses, the read/idle timeout meaning, redirect
-behavior, the absence of a default `User-Agent`, and cookie/session isolation.
-Website documentation that advertised un-implemented functionality (for
-example a developer-tools shortcut) was corrected.
+The repository reference and the public website were updated to make the agent
+interface discoverable for AI agents.
 
 ## Compatibility
 
@@ -57,7 +59,7 @@ example a developer-tools shortcut) was corrected.
 - WebKitGTK 6.0 / GTK 4 remain the rendering stack; page content stays inside
   WebKit's normal web security/process boundary.
 - Vantage remains Linux-first early software. Known limitations carried from
-  v0.1.2 (WebKitGTK capability gaps such as arbitrary response-body capture,
+  v0.1.3 (WebKitGTK capability gaps such as arbitrary response-body capture,
   bounded-timeout containment for pathological page evaluations, and the
   non-blocking ongoing dogfooding evidence items) still apply.
 

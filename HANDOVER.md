@@ -6,9 +6,11 @@ Ubuntu/Omarchy on Wayland. The product goal is a genuinely useful daily browser
 with a smaller operational footprint and a calmer interface than a general
 purpose Chromium distribution.
 
-Version 0.1.3 is the current released version, following v0.1.2 and
-including the completed agent-native browser campaign (A0-A17) plus the
-independently reviewed `net.fetch` agent HTTP surface.
+Version 0.1.4 is the current released version, following v0.1.3 and
+including corrected tab sizing (the window can now shrink well below
+`tabs * 184px`, opened tabs no longer stack invisibly, and new tabs no longer
+flash white) plus agent robustness fixes for strict-CSP pages and blocking
+JavaScript dialogs.
 Only behavior backed by implemented code and retained evidence is shipped;
 broader support, security, compatibility and performance claims remain
 prohibited until their checkpoints are accepted.
