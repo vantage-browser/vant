@@ -1529,11 +1529,22 @@ void tab_box_allocate(GtkWidget *widget, int width, int height, int) {
             tab_width = std::max(1, available / tab_count);
         }
     }
+    int x = 0;
     for (GtkWidget *child = gtk_widget_get_first_child(widget); child;
          child = gtk_widget_get_next_sibling(child)) {
         const int child_width = (state && child == state->tab_drop_placeholder)
             ? placeholder_width : tab_width;
-        gtk_widget_allocate(child, child_width, height, -1, nullptr);
+        if (x != 0) {
+            // gtk_widget_allocate() takes ownership of the transform, so the
+            // per-child translate is created here and never unref'd by us.
+            graphene_point_t point;
+            graphene_point_init(&point, x, 0);
+            gtk_widget_allocate(child, child_width, height, -1,
+                gsk_transform_translate(nullptr, &point));
+        } else {
+            gtk_widget_allocate(child, child_width, height, -1, nullptr);
+        }
+        x += child_width;
     }
 }
 
@@ -2828,6 +2839,15 @@ gboolean tab_sizing_probe(void *data) {
     std::cout << "tab_probe tabs=" << state->tabs.size()
               << " window_min=" << win_min << " window_natural=" << win_nat
               << " strip_min=" << strip_min << " strip_natural=" << strip_nat << '\n';
+
+    std::cout << "tab_probe positions";
+    for (const auto &tab : state->tabs) {
+        graphene_rect_t bounds;
+        if (gtk_widget_compute_bounds(tab->tab, state->tab_strip, &bounds))
+            std::cout << " " << static_cast<int>(bounds.origin.x);
+        else std::cout << " -1";
+    }
+    std::cout << '\n';
 
     const auto dump_tabs = [&]() {
         std::cout << "tab_probe resize window_w=" << gtk_widget_get_width(state->window);

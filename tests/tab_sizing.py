@@ -74,6 +74,11 @@ def parse_probe(output):
                 "strip_min": int(record["strip_min"]),
                 "strip_natural": int(record["strip_natural"]),
             })
+        elif fields[1] == "positions":
+            rows.append({
+                "kind": "positions",
+                "x": [int(t) for t in fields[2:]],
+            })
         else:
             rows.append({
                 "kind": "resize" if fields[1] == "resize" else
@@ -110,6 +115,20 @@ def main():
             f"(<= tabs*min + chrome ~= {PROBE_TABS * K_TAB_MIN + 220})")
     require(m["window_natural"] >= PROBE_TABS * K_TAB_NATURAL,
             f"window natural {m['window_natural']} still accommodates tabs at {K_TAB_NATURAL}px")
+
+    # Every tab must occupy its own slot: positions must be present, valid and
+    # strictly increasing. A regression here stacked every tab at x=0 (the
+    # custom layout allocated size but never translated each child), which made
+    # all but the first tab invisible and unclickable while still reserving
+    # their space.
+    positions = [r for r in rows if r["kind"] == "positions"]
+    require(len(positions) == 1 and len(positions[0]["x"]) == PROBE_TABS,
+            f"probe reports per-tab x positions for all {PROBE_TABS} tabs")
+    xs = positions[0]["x"]
+    require(all(x >= 0 for x in xs), f"all tabs have a non-negative x ({xs})")
+    require(all(b > a for a, b in zip(xs, xs[1:])),
+            f"tab x positions strictly increase so tabs are side by side, "
+            f"not stacked ({xs})")
 
     # The widest row (>= natural) must hold every tab at exactly 184px.
     widest = max(resizes, key=lambda r: r["window_w"])
