@@ -11,7 +11,7 @@ fixed contract:
   * the window's measured minimum is substantially below tabs * 184;
   * with room to spare every tab is exactly 184px (never stretched beyond);
   * below tabs * 184 the tabs compress uniformly as the window shrinks;
-  * once the window reaches its minimum the tabs hold at the per-tab minimum;
+  * compact tabs never shrink below the favicon-safe per-tab minimum;
   * creating/closing tabs while compressed follows the same uniform rule.
 
 Requires a display and the native build. Run:
@@ -22,7 +22,7 @@ import os
 import subprocess
 import sys
 
-K_TAB_MIN = 96
+K_TAB_MIN = 44
 K_TAB_NATURAL = 184
 PROBE_TABS = 6
 TIMEOUT = 90
@@ -165,7 +165,7 @@ def main():
         require(0 < row["tabs"][0] < K_TAB_NATURAL,
                 f"compressed tab width {row['tabs'][0]} is below {K_TAB_NATURAL}")
 
-    # At the floor every tab holds the per-tab minimum.
+    # At the floor tabs must never shrink below the favicon-safe minimum.
     floor = [r for r in resizes if r["window_w"] <= m["window_min"] + 8]
     require(bool(floor), "probe reached the window minimum")
     for row in floor:

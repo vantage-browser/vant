@@ -61,6 +61,7 @@ struct TabState {
     GtkWidget *icon_stack{};
     GtkWidget *favicon{};
     GtkWidget *spinner{};
+    GtkWidget *close{};
     std::string internal_uri;
     std::string display_uri;
     std::string pending_web_uri;
@@ -1457,8 +1458,10 @@ gboolean load_failed(WebKitWebView *view, WebKitLoadEvent, const char *failing_u
 // the minimum. Adding tabs and narrowing the window therefore exercise the
 // same code path. The "+" button and the window controls are siblings of the
 // tab box, so they keep their own natural widths and are never compressed.
-constexpr int kTabMinimumWidth = 96;
+constexpr int kTabMinimumWidth = 44;
 constexpr int kTabNaturalWidth = 184;
+constexpr int kTabTitleCutoffWidth = 112;
+constexpr int kTabCloseCutoffWidth = 68;
 constexpr int kTabHeight = 38;
 
 WindowState *tab_box_state(GtkWidget *widget) {
@@ -1492,7 +1495,11 @@ void tab_box_measure(GtkWidget *widget, GtkOrientation orientation, int,
             continue;
         }
         if (orientation == GTK_ORIENTATION_HORIZONTAL) {
-            *minimum += kTabMinimumWidth;
+            // The strip minimum must not grow with the number of tabs: doing
+            // so makes GTK grow the toplevel window as tabs are opened.  The
+            // allocator compresses individual tabs and the title/close
+            // furniture disappears as space gets tight.
+            *minimum = std::max(*minimum, kTabMinimumWidth);
             *natural += kTabNaturalWidth;
         } else {
             *minimum = std::max(*minimum, kTabHeight);
@@ -1505,7 +1512,7 @@ void tab_box_allocate(GtkWidget *widget, int width, int height, int) {
     if (width < 1 || height < 1) return;
     auto *state = tab_box_state(widget);
     int placeholder_width = 0;
-    int tab_count = 0;
+    std::vector<GtkWidget *> tab_children;
     for (GtkWidget *child = gtk_widget_get_first_child(widget); child;
          child = gtk_widget_get_next_sibling(child)) {
         if (state && child == state->tab_drop_placeholder) {
@@ -1514,29 +1521,69 @@ void tab_box_allocate(GtkWidget *widget, int width, int height, int) {
                 &child_min, &child_nat, nullptr, nullptr);
             placeholder_width = child_nat;
         } else {
-            ++tab_count;
+            tab_children.push_back(child);
         }
     }
+
+    const int available = std::max(0, width - placeholder_width);
+    const int tab_count = static_cast<int>(tab_children.size());
+    int visible_count = tab_count;
+    int first_visible = 0;
+
+    // Once even favicon-only tabs would overflow, keep a contiguous window of
+    // tabs that fits in the strip and hide the rest completely. Keep the
+    // active tab inside that window; when new tabs are opened this naturally
+    // shifts the visible range towards the newest/active tab instead of
+    // drawing tabs over the window controls.
+    if (tab_count > 0 && available < tab_count * kTabMinimumWidth) {
+        visible_count = std::max(1, available / kTabMinimumWidth);
+        visible_count = std::min(visible_count, tab_count);
+        int active_index = 0;
+        if (state) {
+            for (int i = 0; i < tab_count; ++i) {
+                for (const auto &candidate : state->tabs) {
+                    if (candidate->tab == tab_children[i] && candidate->view == state->view) {
+                        active_index = i;
+                        break;
+                    }
+                }
+            }
+        }
+        first_visible = std::clamp(active_index - visible_count + 1, 0,
+                                   tab_count - visible_count);
+    }
+
+    for (int i = 0; i < tab_count; ++i) {
+        gtk_widget_set_visible(tab_children[i],
+            i >= first_visible && i < first_visible + visible_count);
+    }
+
     int tab_width = kTabNaturalWidth;
-    if (tab_count > 0) {
-        const int available = std::max(0, width - placeholder_width);
-        if (available < tab_count * kTabNaturalWidth) {
-            // Progressively compress. The layout's reported minimum is
-            // tabs * kTabMinimumWidth, so in normal operation the allocation
-            // never drops below that; allowing a slight further squeeze here
-            // simply avoids overflow during a drag placeholder animation or
-            // when tabs are added beyond the strip's capacity.
-            tab_width = std::max(1, available / tab_count);
-        }
+    if (visible_count > 0 && available < visible_count * kTabNaturalWidth) {
+        tab_width = std::max(kTabMinimumWidth, available / visible_count);
     }
+
     int x = 0;
+    int tab_index = 0;
     for (GtkWidget *child = gtk_widget_get_first_child(widget); child;
          child = gtk_widget_get_next_sibling(child)) {
-        const int child_width = (state && child == state->tab_drop_placeholder)
-            ? placeholder_width : tab_width;
+        const bool is_placeholder = state && child == state->tab_drop_placeholder;
+        if (!is_placeholder) {
+            const bool visible = tab_index >= first_visible &&
+                                 tab_index < first_visible + visible_count;
+            ++tab_index;
+            if (!visible) continue;
+            if (state) {
+                for (const auto &candidate : state->tabs) {
+                    if (candidate->tab != child) continue;
+                    gtk_widget_set_visible(candidate->label, tab_width >= kTabTitleCutoffWidth);
+                    gtk_widget_set_visible(candidate->close, tab_width >= kTabCloseCutoffWidth);
+                    break;
+                }
+            }
+        }
+        const int child_width = is_placeholder ? placeholder_width : tab_width;
         if (x != 0) {
-            // gtk_widget_allocate() takes ownership of the transform, so the
-            // per-child translate is created here and never unref'd by us.
             graphene_point_t point;
             graphene_point_init(&point, x, 0);
             gtk_widget_allocate(child, child_width, height, -1,
@@ -1547,7 +1594,6 @@ void tab_box_allocate(GtkWidget *widget, int width, int height, int) {
         x += child_width;
     }
 }
-
 void select_tab(TabState *tab) {
     auto *state = tab->window;
     state->view = tab->view;
@@ -2730,6 +2776,7 @@ TabState *new_tab(WindowState *state, const std::string &uri, bool load_initial)
     gtk_box_append(GTK_BOX(tab_content), tab->label);
     gtk_button_set_child(GTK_BUTTON(select), tab_content);
     auto *close = icon_button("window-close-symbolic", "Close tab");
+    tab->close = close;
     gtk_widget_add_css_class(close, "tab-close");
     gtk_box_append(GTK_BOX(hover_surface), select);
     gtk_box_append(GTK_BOX(hover_surface), close);
