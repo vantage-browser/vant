@@ -791,10 +791,14 @@ std::string internal_page(WindowState *state, std::string_view uri) {
         const auto dark_sites_enabled = vantage::dark_mode_enabled_domains();
         std::string dark_sites;
         for (const auto &domain : dark_sites_enabled)
-            dark_sites += "<div class=item><div class=details><strong>" + html_escape(domain) + "</strong><span>Dark Mode is enabled for this domain.</span></div><a class=setting href='vantage:dark-mode-domain?domain=" + html_escape(domain) + "&enabled=0'>Disable</a></div>";
+            dark_sites += "<div class='item dark-site' data-dark-domain='" + html_escape(domain) + "'><div class=details><strong>" + html_escape(domain) + "</strong><span>Dark Mode is enabled for this domain.</span></div><a class=setting href='vantage:dark-mode-domain?domain=" + html_escape(domain) + "&enabled=0'>Disable</a></div>";
         if (dark_sites.empty()) dark_sites = "<p class=empty>No websites have Dark Mode enabled. Press Ctrl+Shift+D on a website to enable it.</p>";
+        const auto dark_site_count = std::to_string(dark_sites_enabled.size());
+        const std::string dark_site_tools = dark_sites_enabled.empty() ? "" :
+            "<div class=dark-site-tools>" + std::string(dark_sites_enabled.size() > 6 ? "<input class='search dark-site-search' type=search placeholder='Filter enabled websites' oninput='filterDarkSites(this.value)'>" : "") +
+            "<a class=setting href='vantage:dark-mode-disable-all'>Disable all</a></div>";
         content = std::string("<div class=item><div class=details><strong>Dark Mode</strong><span>Off by default · Press Ctrl+Shift+D to toggle Dark Reader for the current website. Your choice is remembered per domain.</span></div></div>")
-            + "<h2 style='font-size:15px;margin:24px 4px 12px'>Enabled websites</h2>" + dark_sites
+            + "<div class=section-heading><h2>Enabled websites (" + dark_site_count + ")</h2>" + dark_site_tools + "</div><div class=dark-sites>" + dark_sites + "</div>"
             + "<div class=item><div class=details><strong>Compatibility video rendering</strong><span>"
             + std::string(compatibility
                 ? "Enabled · Uses the broadly compatible rendering path so video works reliably."
@@ -820,7 +824,7 @@ std::string internal_page(WindowState *state, std::string_view uri) {
         ".item span,.empty{color:#aaa59c}.actions{display:flex;gap:4px}.actions a{display:grid;place-items:center;width:34px;height:34px;background:transparent;color:#c9c4ba;text-decoration:none}.actions svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.actions a:hover{color:#ff8a62}.bulk,.form button,.setting{border:0;border-radius:7px;background:#3b3936;color:#eee9df;padding:8px 11px;cursor:pointer;text-decoration:none;white-space:nowrap}.bulk:hover,.form button:hover,.setting:hover{background:#4b4844;color:#ff9a76}.fileicon{display:grid;place-items:center;width:42px;height:46px;border-radius:6px;background:#3f9e91;color:#fff!important;font:bold 10px ui-monospace,monospace;text-transform:uppercase}"
         ".add{margin-bottom:16px}.add summary,.edit summary{cursor:pointer;color:#ccc7bd}.form{display:flex;gap:8px;margin-top:10px}.form input{flex:1;border-radius:8px}.edit{max-width:60px}.edit[open]{max-width:100%;flex:1}"
         ".rowmenu{position:relative}.rowmenu summary{list-style:none;cursor:pointer;font-size:22px;padding:4px 8px}.rowmenu summary::-webkit-details-marker{display:none}.rowmenu>div{position:absolute;z-index:2;right:0;top:32px;width:170px;padding:6px;background:#343331;border:1px solid #4d4a45;border-radius:8px;box-shadow:0 8px 24px #0008}.rowmenu button,.rowmenu a{display:block;width:100%;padding:9px;border:0;background:transparent;color:#eee9df;text-align:left;text-decoration:none}.rowmenu button:hover,.rowmenu a:hover{color:#ff8a62}"
-        ".history-day{margin:0 0 16px;border:1px solid #403e3a;border-radius:11px;background:#292827;overflow:visible}.history-day h2{margin:0;padding:14px 16px 9px;font-size:14px}.history-list{padding:0 8px 8px}.history-item{gap:10px;margin:0;padding:7px 8px;border:0;border-radius:7px;background:transparent}.history-item:hover{border:0;background:#353432}.history-item time{width:76px;flex:none;color:#aaa59c;font-size:12px}.history-item .favicon,.history-item .fallback{width:17px;height:17px}.history-details{flex-direction:row;align-items:baseline;gap:8px}.history-details strong{font-size:13px}.history-details span{font-size:12px}.history-item .rowmenu summary{font-size:19px;padding:1px 6px}"
+        ".history-day{margin:0 0 16px;border:1px solid #403e3a;border-radius:11px;background:#292827;overflow:visible}.history-day h2{margin:0;padding:14px 16px 9px;font-size:14px}.history-list{padding:0 8px 8px}.history-item{gap:10px;margin:0;padding:7px 8px;border:0;border-radius:7px;background:transparent}.history-item:hover{border:0;background:#353432}.history-item time{width:76px;flex:none;color:#aaa59c;font-size:12px}.history-item .favicon,.history-item .fallback{width:17px;height:17px}.history-details{flex-direction:row;align-items:baseline;gap:8px}.history-details strong{font-size:13px}.history-details span{font-size:12px}.history-item .rowmenu summary{font-size:19px;padding:1px 6px}.section-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:24px 4px 12px}.section-heading h2{font-size:15px;margin:0}.dark-site-tools{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex:1}.dark-site-search{width:min(320px,100%);height:36px}.dark-sites{max-height:420px;overflow-y:auto;overscroll-behavior:contain;padding-right:4px;scrollbar-gutter:stable}.dark-sites .item:last-child{margin-bottom:0}@media(max-width:700px){.section-heading{align-items:flex-start;flex-direction:column}.dark-site-tools{width:100%;justify-content:space-between}.dark-site-search{flex:1}}"
         "</style></head><body><main><div class=top><h1>" + title + "</h1><input class=search type=search placeholder='Search " + title +
         "' id=pageSearch oninput=filterRows(this.value)>" + bulk + "</div>" + content +
         "</main><script>function filterRows(q){q=q.toLowerCase();document.querySelectorAll('[data-search]').forEach(e=>e.hidden=!e.dataset.search.toLowerCase().includes(q))}"
@@ -828,6 +832,7 @@ std::string internal_page(WindowState *state, std::string_view uri) {
         "function addBookmark(){location.href='vantage:bookmark-add?title='+encodeURIComponent(addTitle.value)+'&uri='+encodeURIComponent(addUri.value)}"
         "function editBookmark(b){const f=b.parentElement;location.href='vantage:bookmark-edit?old='+encodeURIComponent(b.dataset.old)+'&title='+encodeURIComponent(f.querySelector('.editTitle').value)+'&uri='+encodeURIComponent(f.querySelector('.editUri').value)}"
         "function moreFromSite(b){try{pageSearch.value=new URL(b.dataset.site).hostname;filterRows(pageSearch.value);b.closest('details').open=false}catch(e){}}"
+        "function filterDarkSites(q){q=q.trim().toLowerCase();document.querySelectorAll('.dark-site').forEach(e=>e.hidden=!e.dataset.darkDomain.toLowerCase().includes(q))}"
         "</script></body></html>";
 }
 
@@ -1401,6 +1406,17 @@ gboolean decide_policy(WebKitWebView *view, WebKitPolicyDecision *decision,
             }
             webkit_policy_decision_ignore(decision);
             load_decision(tab, tab->window->policy.resolve("vantage:bookmarks"));
+            return TRUE;
+        }
+        if (target.starts_with("vantage:dark-mode-disable-all")) {
+            try {
+                for (const auto &domain : vantage::dark_mode_enabled_domains())
+                    vantage::set_dark_mode_enabled_for_domain(domain, false);
+            } catch (const std::exception &error) {
+                g_warning("Unable to clear Dark Mode domain preferences: %s", error.what());
+            }
+            webkit_policy_decision_ignore(decision);
+            load_decision(tab, tab->window->policy.resolve("vantage:settings"));
             return TRUE;
         }
         if (target.starts_with("vantage:dark-mode-domain")) {
