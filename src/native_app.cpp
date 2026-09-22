@@ -2350,10 +2350,10 @@ void address_focus_changed(GObject *address, GParamSpec *, WindowState *state) {
 }
 
 void address_released(GtkGestureClick *, int, double, double, WindowState *state) {
-    if (!state->address_focused_at) return;
-    constexpr gint64 first_click_window_us = 200 * 1000;
-    const auto elapsed = g_get_monotonic_time() - state->address_focused_at;
-    if (elapsed >= 0 && elapsed <= first_click_window_us) g_idle_add(select_address_deferred, state);
+    // Diagnostic: select the entire address after every primary click.
+    // This deliberately ignores focus timing so we can verify that the
+    // post-click selection mechanism itself survives GTK's click handling.
+    g_idle_add(select_address_deferred, state);
 }
 
 gboolean address_key_pressed(GtkEventControllerKey *, guint key, guint, GdkModifierType modifiers,
