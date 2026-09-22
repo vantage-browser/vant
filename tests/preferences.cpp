@@ -31,21 +31,19 @@ int main() {
     vantage::apply_video_rendering_environment(true);
     assert(std::string(std::getenv("WEBKIT_DISABLE_COMPOSITING_MODE")) == "1");
 
-    // Dark Mode is opt-in globally. Per-domain exceptions are only persisted
-    // when users explicitly toggle a domain while it is enabled.
-    assert(!vantage::dark_mode_enabled());
-    assert(vantage::dark_mode_disabled_domains().empty());
-    vantage::set_dark_mode_enabled(true);
-    assert(vantage::dark_mode_enabled());
+    // Dark Mode is off for every site by default and becomes enabled only
+    // for domains the user explicitly toggles.
+    assert(vantage::dark_mode_enabled_domains().empty());
+    assert(!vantage::dark_mode_enabled_for_domain("example.com"));
+    vantage::set_dark_mode_enabled_for_domain("example.com", true);
+    vantage::set_dark_mode_enabled_for_domain("www.example.org", true);
+    assert(vantage::dark_mode_enabled_for_domain("example.com"));
+    assert(vantage::dark_mode_enabled_for_domain("www.example.org"));
+    assert(vantage::dark_mode_enabled_domains().size() == 2);
     assert(vantage::compatibility_video_rendering()); // setters preserve unrelated preferences
-    vantage::set_dark_mode_disabled_for_domain("example.com", true);
-    vantage::set_dark_mode_disabled_for_domain("www.example.org", true);
-    assert(vantage::dark_mode_disabled_for_domain("example.com"));
-    assert(vantage::dark_mode_disabled_for_domain("www.example.org"));
-    assert(vantage::dark_mode_disabled_domains().size() == 2);
-    vantage::set_dark_mode_disabled_for_domain("example.com", false);
-    assert(!vantage::dark_mode_disabled_for_domain("example.com"));
-    assert(vantage::dark_mode_disabled_for_domain("www.example.org"));
+    vantage::set_dark_mode_enabled_for_domain("example.com", false);
+    assert(!vantage::dark_mode_enabled_for_domain("example.com"));
+    assert(vantage::dark_mode_enabled_for_domain("www.example.org"));
 
     std::filesystem::remove_all(root);
 }

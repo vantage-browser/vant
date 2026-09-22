@@ -93,38 +93,30 @@ void apply_video_rendering_environment(bool enabled) {
         throw std::runtime_error("cannot enable accelerated video rendering");
 }
 
-bool dark_mode_enabled() {
+std::vector<std::string> dark_mode_enabled_domains() {
     const auto values = read_preferences();
-    const auto found = values.find("dark_mode");
-    return found != values.end() && found->second == "1";
-}
-
-void set_dark_mode_enabled(bool enabled) {
-    auto values = read_preferences();
-    values["dark_mode"] = enabled ? "1" : "0";
-    write_preferences(values);
-}
-
-std::vector<std::string> dark_mode_disabled_domains() {
-    const auto values = read_preferences();
-    const auto found = values.find("dark_mode_disabled_domains");
+    const auto found = values.find("dark_mode_enabled_domains");
     return found == values.end() ? std::vector<std::string>{} : split_domains(found->second);
 }
 
-bool dark_mode_disabled_for_domain(const std::string &domain) {
-    const auto domains = dark_mode_disabled_domains();
+bool dark_mode_enabled_for_domain(const std::string &domain) {
+    const auto domains = dark_mode_enabled_domains();
     return std::find(domains.begin(), domains.end(), domain) != domains.end();
 }
 
-void set_dark_mode_disabled_for_domain(const std::string &domain, bool disabled) {
+void set_dark_mode_enabled_for_domain(const std::string &domain, bool enabled) {
     if (domain.empty() || domain.find('|') != std::string::npos) return;
     auto values = read_preferences();
-    auto domains = dark_mode_disabled_domains();
+    auto domains = dark_mode_enabled_domains();
     const auto found = std::find(domains.begin(), domains.end(), domain);
-    if (disabled && found == domains.end()) domains.push_back(domain);
-    if (!disabled && found != domains.end()) domains.erase(found);
+    if (enabled && found == domains.end()) domains.push_back(domain);
+    if (!enabled && found != domains.end()) domains.erase(found);
     std::sort(domains.begin(), domains.end());
-    values["dark_mode_disabled_domains"] = join_domains(domains);
+    values["dark_mode_enabled_domains"] = join_domains(domains);
+    // Remove the experimental global/exception model so upgrades start from
+    // the explicit per-site allow-list only.
+    values.erase("dark_mode");
+    values.erase("dark_mode_disabled_domains");
     write_preferences(values);
 }
 

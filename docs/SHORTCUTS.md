@@ -15,7 +15,7 @@
 | `Ctrl+H` | Open history |
 | `Ctrl+J` | Open downloads |
 | `Ctrl+D` | Add or remove the active page bookmark |
-| `Ctrl+Shift+D` | Toggle Dark Mode for the current domain (when Dark Mode is enabled) |
+| `Ctrl+Shift+D` | Toggle Dark Mode for the current domain |
 | `Ctrl+Shift+Delete` | Delete browsing history |
 | `Ctrl+P` | Print the active page |
 | `F11` | Enter or leave fullscreen |

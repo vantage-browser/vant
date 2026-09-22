@@ -130,6 +130,7 @@ struct WindowState {
     GtkWidget *site_data{};
     GtkWidget *site_clear{};
     GtkWidget *menu_button{};
+    GtkWidget *dark_mode_indicator{};
     GtkWidget *downloads_button{};
     GtkWidget *downloads_popover{};
     GtkWidget *downloads_box{};
@@ -787,17 +788,13 @@ std::string internal_page(WindowState *state, std::string_view uri) {
     } else if (uri == "vantage:settings") {
         title = "Settings";
         const bool compatibility = vantage::compatibility_video_rendering();
-        const bool dark_mode = vantage::dark_mode_enabled();
-        const auto dark_exceptions = vantage::dark_mode_disabled_domains();
+        const auto dark_sites_enabled = vantage::dark_mode_enabled_domains();
         std::string dark_sites;
-        for (const auto &domain : dark_exceptions)
-            dark_sites += "<div class=item><div class=details><strong>" + html_escape(domain) + "</strong><span>Dark Mode disabled for this domain.</span></div><a class=setting href='vantage:dark-mode-domain?domain=" + html_escape(domain) + "&disabled=0'>Enable</a></div>";
-        if (dark_sites.empty()) dark_sites = "<p class=empty>No per-domain Dark Mode exceptions.</p>";
-        content = "<div class=item><div class=details><strong>Dark Mode</strong><span>" + std::string(dark_mode
-                ? "Enabled · Dark Reader transforms light websites; sites that are already dark are left unchanged. Ctrl+Shift+D toggles the current domain."
-                : "Disabled · Websites are displayed with their original colours. Enable Dark Mode to transform light websites.")
-            + "</span></div><a class=setting href='vantage:dark-mode?enabled=" + (dark_mode ? "0'>Turn off" : "1'>Turn on") + "</a></div>"
-            + "<h2 style='font-size:15px;margin:24px 4px 12px'>Disabled websites</h2>" + dark_sites
+        for (const auto &domain : dark_sites_enabled)
+            dark_sites += "<div class=item><div class=details><strong>" + html_escape(domain) + "</strong><span>Dark Mode is enabled for this domain.</span></div><a class=setting href='vantage:dark-mode-domain?domain=" + html_escape(domain) + "&enabled=0'>Disable</a></div>";
+        if (dark_sites.empty()) dark_sites = "<p class=empty>No websites have Dark Mode enabled. Press Ctrl+Shift+D on a website to enable it.</p>";
+        content = "<div class=item><div class=details><strong>Dark Mode</strong><span>Off by default · Press Ctrl+Shift+D to toggle Dark Reader for the current website. Your choice is remembered per domain.</span></div></div>"
+            + "<h2 style='font-size:15px;margin:24px 4px 12px'>Enabled websites</h2>" + dark_sites
             + "<div class=item><div class=details><strong>Compatibility video rendering</strong><span>"
             + std::string(compatibility
                 ? "Enabled · Uses the broadly compatible rendering path so video works reliably."
@@ -1156,6 +1153,10 @@ void sync_active_chrome(WindowState *state) {
         gtk_widget_set_tooltip_text(state->bookmark_button,
             bookmarked ? "Remove bookmark" : "Bookmark this tab");
         update_site_information(state, shown);
+        bool dark_mode_active = false;
+        if (uri && (g_str_has_prefix(uri, "http://") || g_str_has_prefix(uri, "https://")))
+            dark_mode_active = vantage::dark_mode_enabled_for_domain(uri_host(uri));
+        gtk_widget_set_visible(state->dark_mode_indicator, dark_mode_active);
     }
 }
 
@@ -1275,9 +1276,9 @@ void load_changed(WebKitWebView *view, WebKitLoadEvent event, TabState *tab) {
         tab->recovering_blank_navigation = false;
     }
     if (!page_uri || (!g_str_has_prefix(page_uri, "http://") && !g_str_has_prefix(page_uri, "https://"))) return;
-    if (vantage::dark_mode_enabled()) {
+    {
         const auto domain = uri_host(page_uri);
-        if (!vantage::dark_mode_disabled_for_domain(domain))
+        if (vantage::dark_mode_enabled_for_domain(domain))
             {
                 const auto &dark_reader = dark_reader_source();
                 if (!dark_reader.empty()) {
@@ -1404,16 +1405,9 @@ gboolean decide_policy(WebKitWebView *view, WebKitPolicyDecision *decision,
         }
         if (target.starts_with("vantage:dark-mode-domain")) {
             const auto domain = query_value(target, "domain");
-            const auto disabled = query_value(target, "disabled") == "1";
-            try { vantage::set_dark_mode_disabled_for_domain(domain, disabled); }
+            const auto enabled = query_value(target, "enabled") == "1";
+            try { vantage::set_dark_mode_enabled_for_domain(domain, enabled); }
             catch (const std::exception &error) { g_warning("Unable to save Dark Mode domain preference: %s", error.what()); }
-            webkit_policy_decision_ignore(decision);
-            load_decision(tab, tab->window->policy.resolve("vantage:settings"));
-            return TRUE;
-        }
-        if (target.starts_with("vantage:dark-mode")) {
-            try { vantage::set_dark_mode_enabled(query_value(target, "enabled") == "1"); }
-            catch (const std::exception &error) { g_warning("Unable to save Dark Mode preference: %s", error.what()); }
             webkit_policy_decision_ignore(decision);
             load_decision(tab, tab->window->policy.resolve("vantage:settings"));
             return TRUE;
@@ -3059,13 +3053,13 @@ gboolean key_pressed(GtkEventControllerKey *, guint keyval, guint,
         return TRUE;
     }
     if (control && shift && (keyval == GDK_KEY_d || keyval == GDK_KEY_D)) {
-        if (vantage::dark_mode_enabled() && state->view) {
+        if (state->view) {
             const char *uri = webkit_web_view_get_uri(state->view);
             if (uri && (g_str_has_prefix(uri, "http://") || g_str_has_prefix(uri, "https://"))) {
                 const auto domain = uri_host(uri);
                 try {
-                    const bool disabled = !vantage::dark_mode_disabled_for_domain(domain);
-                    vantage::set_dark_mode_disabled_for_domain(domain, disabled);
+                    const bool enabled = !vantage::dark_mode_enabled_for_domain(domain);
+                    vantage::set_dark_mode_enabled_for_domain(domain, enabled);
                     webkit_web_view_reload(state->view);
                 } catch (const std::exception &error) {
                     g_warning("Unable to toggle Dark Mode for domain: %s", error.what());
@@ -3456,6 +3450,11 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
         gtk_widget_set_sensitive(privacy, FALSE);
         gtk_box_append(GTK_BOX(toolbar), privacy);
     }
+    state->dark_mode_indicator = icon_button("weather-clear-night-symbolic", "Dark Mode is enabled for this website (Ctrl+Shift+D)");
+    gtk_widget_add_css_class(state->dark_mode_indicator, "privacy-indicator");
+    gtk_widget_set_sensitive(state->dark_mode_indicator, FALSE);
+    gtk_widget_set_visible(state->dark_mode_indicator, FALSE);
+    gtk_box_append(GTK_BOX(toolbar), state->dark_mode_indicator);
     state->downloads_button = gtk_menu_button_new();
     gtk_widget_add_css_class(state->downloads_button, "flat");
     gtk_widget_set_tooltip_text(state->downloads_button, "Downloads");
