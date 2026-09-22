@@ -28,10 +28,15 @@ bool compatibility_video_rendering() {
     std::ifstream input(preferences_path());
     std::string line;
     while (std::getline(input, line)) {
-        if (line == "compatibility_video_rendering=0") return false;
-        if (line == "compatibility_video_rendering=1") return true;
+        // v1 defaulted compatibility rendering on.  That forces
+        // WEBKIT_DISABLE_COMPOSITING_MODE=1, which can hang/crash modern
+        // WebKitGTK pages (including ChatGPT/Google authentication).  Ignore
+        // the legacy key so existing profiles migrate to accelerated mode;
+        // only an explicit v2 preference may opt back into compatibility mode.
+        if (line == "compatibility_video_rendering_v2=0") return false;
+        if (line == "compatibility_video_rendering_v2=1") return true;
     }
-    return true;
+    return false;
 }
 
 void set_compatibility_video_rendering(bool enabled) {
@@ -41,7 +46,7 @@ void set_compatibility_video_rendering(bool enabled) {
     {
         std::ofstream output(temporary, std::ios::trunc);
         if (!output) throw std::runtime_error("cannot write Vantage preferences");
-        output << "compatibility_video_rendering=" << (enabled ? '1' : '0') << '\n';
+        output << "compatibility_video_rendering_v2=" << (enabled ? '1' : '0') << '\n';
         output.flush();
         if (!output) throw std::runtime_error("cannot write Vantage preferences");
     }
