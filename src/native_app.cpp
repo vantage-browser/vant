@@ -163,7 +163,6 @@ struct WindowState {
     double suggestion_pointer_y{};
     double progress_fraction{};
     gint64 last_tab_scroll{};
-    gint64 address_focused_at{};
     unsigned find_current{};
     unsigned find_total{};
     unsigned find_generation{};
@@ -2346,29 +2345,15 @@ void focus_and_select_address(WindowState *state) {
     gtk_editable_select_region(GTK_EDITABLE(state->address), 0, -1);
 }
 
-gboolean select_address_after_click(void *data) {
-    focus_and_select_address(static_cast<WindowState *>(data));
-    return G_SOURCE_REMOVE;
-}
-
-void address_focus_changed(GObject *address, GParamSpec *, WindowState *state) {
-    if (gtk_widget_has_focus(GTK_WIDGET(address))) state->address_focused_at = g_get_monotonic_time();
-}
-
-gboolean address_legacy_event(GtkEventControllerLegacy *, GdkEvent *event, WindowState *state) {
-    if (gdk_event_get_event_type(event) != GDK_BUTTON_RELEASE ||
-        gdk_button_event_get_button(event) != GDK_BUTTON_PRIMARY)
-        return FALSE;
-
-    // GTK's GtkEntry owns its own click gesture, so a sibling GtkGestureClick can
-    // be denied before its release callback runs. Observe the raw event in the
-    // capture phase instead. If this click is the one that just focused the
-    // address bar, run the exact same focus+selection path as Ctrl+L after GTK
-    // has finished placing the caret for the click.
-    const auto focused_at = state->address_focused_at;
-    if (focused_at > 0 && g_get_monotonic_time() - focused_at <= 200000)
-        g_timeout_add(1, select_address_after_click, state);
-    return FALSE;
+void address_select_all_pressed(GtkGestureClick *gesture, int, double, double, WindowState *state) {
+    // Diagnostic: claim every primary-button click before GtkEntry's own click
+    // gesture can place the caret and clear our selection. If this reliably
+    // highlights the URL, the remaining problem is deciding which clicks to
+    // claim rather than how to select the address text.
+    if (gtk_gesture_single_get_current_button(GTK_GESTURE_SINGLE(gesture)) != GDK_BUTTON_PRIMARY)
+        return;
+    focus_and_select_address(state);
+    gtk_gesture_set_state(GTK_GESTURE(gesture), GTK_EVENT_SEQUENCE_CLAIMED);
 }
 
 gboolean address_key_pressed(GtkEventControllerKey *, guint key, guint, GdkModifierType modifiers,
@@ -3611,11 +3596,11 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     g_signal_connect(state->reload_stop, "clicked", G_CALLBACK(reload_or_stop), state);
     g_signal_connect(state->address, "activate", G_CALLBACK(submit_address), state);
     g_signal_connect(state->address, "changed", G_CALLBACK(address_changed), state);
-    g_signal_connect(state->address, "notify::has-focus", G_CALLBACK(address_focus_changed), state);
-    auto *address_events = gtk_event_controller_legacy_new();
-    gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(address_events), GTK_PHASE_CAPTURE);
-    g_signal_connect(address_events, "event", G_CALLBACK(address_legacy_event), state);
-    gtk_widget_add_controller(state->address, address_events);
+    auto *address_select_click = gtk_gesture_click_new();
+    gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(address_select_click), GDK_BUTTON_PRIMARY);
+    gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(address_select_click), GTK_PHASE_CAPTURE);
+    g_signal_connect(address_select_click, "pressed", G_CALLBACK(address_select_all_pressed), state);
+    gtk_widget_add_controller(state->address, GTK_EVENT_CONTROLLER(address_select_click));
     auto *dismiss_click = gtk_gesture_click_new();
     gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(dismiss_click), GTK_PHASE_BUBBLE);
     g_signal_connect(dismiss_click, "pressed", G_CALLBACK(dismiss_suggestions_on_click), state);
