@@ -4,3 +4,7 @@
 *.log
 __pycache__/
 !/third_party/jspp/manifest.json
+
+# Vendored-at-build Dark Reader API bundle
+/assets/darkreader.js
+/assets/darkreader.js.new

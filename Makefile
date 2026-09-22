@@ -8,6 +8,8 @@ NATIVE_LIBS = $(shell $(PKG_CONFIG) --libs gtk4 webkitgtk-6.0)
 SQLITE_CFLAGS = $(shell $(PKG_CONFIG) --cflags sqlite3)
 SQLITE_LIBS = $(shell $(PKG_CONFIG) --libs sqlite3)
 BUILD := build
+DARKREADER_VERSION := 4.9.128
+DARKREADER_JS := assets/darkreader.js
 AGENT_SOURCES := src/agent_rpc.cpp
 AGENT_OBJECTS := $(AGENT_SOURCES:src/%.cpp=$(BUILD)/%.o)
 CORE_SOURCES := src/application.cpp src/navigation.cpp src/browser_model.cpp src/session_store.cpp src/user_data.cpp src/preferences.cpp src/launch_options.cpp
@@ -16,8 +18,17 @@ JSPP_DIR := third_party/jspp
 JSPP_SOURCES := $(filter-out $(JSPP_DIR)/src/main.cpp,$(wildcard $(JSPP_DIR)/src/*.cpp))
 JSPP_OBJECTS := $(JSPP_SOURCES:$(JSPP_DIR)/src/%.cpp=$(BUILD)/jspp/%.o)
 
-.PHONY: all deps test test-unit test-sanitize smoke smoke-native test-tab-sizing benchmark evidence vendor-check vendor-integrity clean
-all: deps $(BUILD)/vant
+.PHONY: all deps darkreader test test-unit test-sanitize smoke smoke-native test-tab-sizing benchmark evidence vendor-check vendor-integrity clean
+all: deps darkreader $(BUILD)/vant
+
+darkreader: $(DARKREADER_JS)
+
+$(DARKREADER_JS):
+	@if ! command -v curl >/dev/null 2>&1; then echo "error: curl is required to fetch the pinned Dark Reader API bundle." >&2; exit 1; fi
+	@mkdir -p assets
+	@echo "Fetching Dark Reader $(DARKREADER_VERSION) API bundle..."
+	@curl -fL --retry 2 --connect-timeout 15 "https://cdn.jsdelivr.net/npm/darkreader@$(DARKREADER_VERSION)/darkreader.js" -o "$@.new"
+	@mv "$@.new" "$@"
 
 deps:
 	@if ! command -v "$(PKG_CONFIG)" >/dev/null 2>&1; then \
@@ -40,7 +51,7 @@ $(BUILD):
 $(BUILD)/%.o: src/%.cpp | deps $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c $< -o $@
 
-$(BUILD)/native_app.o: src/native_app.cpp src/native_app.h | deps $(BUILD)
+$(BUILD)/native_app.o: src/native_app.cpp src/native_app.h $(DARKREADER_JS) | deps $(BUILD)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(NATIVE_CFLAGS) -c $< -o $@
 
 $(BUILD)/jspp:

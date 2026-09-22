@@ -18,6 +18,7 @@
 #include <cmath>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <memory>
@@ -49,28 +50,35 @@ constexpr const char *agent_diagnostics_script = R"JS((()=>{
   addEventListener('unhandledrejection',e=>push('unhandledrejection',{message:String(e.reason&&e.reason.stack||e.reason||'')}));
 })())JS";
 
-constexpr const char *dark_mode_script = R"JS((()=>{
-if(window.__vantageDarkMode)return;
-const clamp=v=>Math.max(0,Math.min(255,v));
+constexpr const char *dark_mode_bootstrap = R"JS((()=>{
+if(window.__vantageDarkReaderApplied)return;
 const parse=c=>{const m=String(c).match(/^rgba?\(\s*([\d.]+)[, ]+\s*([\d.]+)[, ]+\s*([\d.]+)(?:\s*[,/]\s*([\d.]+))?\s*\)$/i);return m?[+m[1],+m[2],+m[3],m[4]===undefined?1:+m[4]]:null};
 const lum=c=>{const f=x=>{x/=255;return x<=.04045?x/12.92:Math.pow((x+.055)/1.055,2.4)};return .2126*f(c[0])+.7152*f(c[1])+.0722*f(c[2])};
-const rgb=c=>`rgba(${Math.round(c[0])},${Math.round(c[1])},${Math.round(c[2])},${c[3]})`;
-const darken=c=>{const l=lum(c);if(c[3]===0||l<.38)return null;const target=.055+(1-l)*.075,scale=Math.sqrt(target/Math.max(l,.001));return rgb([clamp(c[0]*scale),clamp(c[1]*scale),clamp(c[2]*scale),c[3]])};
-const lighten=c=>{const l=lum(c);if(c[3]===0||l>.48)return null;const target=.72+(1-l)*.12,scale=Math.sqrt(target/Math.max(l,.001));return rgb([clamp(c[0]*scale),clamp(c[1]*scale),clamp(c[2]*scale),c[3]])};
-const sample=()=>{const roots=[document.documentElement,document.body].filter(Boolean);let dark=0,total=0;for(const e of roots){const s=getComputedStyle(e),b=parse(s.backgroundColor),c=parse(s.color);if(b&&b[3]>.2){total++;if(lum(b)<.22)dark+=2}if(c&&lum(c)>.55)dark++}const meta=document.querySelector('meta[name="color-scheme"]')?.content?.toLowerCase()||'';const scheme=getComputedStyle(document.documentElement).colorScheme||'';return (dark>=3&&total>0)||((meta.includes('dark')||scheme.includes('dark'))&&roots.some(e=>{const b=parse(getComputedStyle(e).backgroundColor);return b&&b[3]>.2&&lum(b)<.3}))};
-if(sample()){window.__vantageDarkMode={native:true};return;}
-const props=[['background-color',darken],['color',lighten],['border-top-color',darken],['border-right-color',darken],['border-bottom-color',darken],['border-left-color',darken],['outline-color',darken],['text-decoration-color',lighten],['fill',darken],['stroke',lighten]];
-const skip=e=>e.matches('img,video,canvas,picture,iframe,object,embed')||e.closest('svg image');
-const apply=e=>{if(!(e instanceof Element)||skip(e))return;const s=getComputedStyle(e);for(const [p,f] of props){const c=parse(s.getPropertyValue(p));if(!c)continue;const v=f(c);if(v)e.style.setProperty(p,v,'important')}if(e===document.documentElement||e===document.body)e.style.setProperty('color-scheme','dark','important')};
-const variables=()=>{const root=document.documentElement,s=getComputedStyle(root);for(const name of s){if(!name.startsWith('--'))continue;const raw=s.getPropertyValue(name).trim(),c=parse(raw);if(!c)continue;const l=lum(c),v=l>.55?darken(c):l<.35?lighten(c):null;if(v)root.style.setProperty(name,v,'important')}};
-const ruleValue=(prop,value)=>{const c=parse(value.trim());if(!c)return null;if(prop.includes('background')||prop.includes('border')||prop==='outline-color'||prop==='fill')return darken(c);if(prop==='color'||prop==='stroke'||prop==='text-decoration-color')return lighten(c);return null};
-const sheetOverrides=()=>{let css='';const visit=rules=>{for(const r of rules){if(r.type===CSSRule.STYLE_RULE){let body='';for(const p of r.style){const v=ruleValue(p,r.style.getPropertyValue(p));if(v)body+=`${p}:${v}!important;`}if(body)css+=`${r.selectorText}{${body}}`}else if(r.cssRules){try{visit(r.cssRules)}catch{}}}};for(const sh of document.styleSheets){try{visit(sh.cssRules)}catch{}}let st=document.getElementById('__vantage_dark_rules');if(!st){st=document.createElement('style');st.id='__vantage_dark_rules';(document.head||document.documentElement).append(st)}st.textContent=css};
-const scan=root=>{if(root instanceof Element)apply(root);if(root.querySelectorAll)root.querySelectorAll('*').forEach(apply)};
-variables();sheetOverrides();scan(document.documentElement);
-let queued=false;const pending=new Set();const flush=()=>{queued=false;for(const n of pending)scan(n);pending.clear()};
-let sheetsDirty=false;new MutationObserver(ms=>{for(const m of ms){if(m.type==='attributes')pending.add(m.target);for(const n of m.addedNodes)if(n.nodeType===1){pending.add(n);if(n.matches?.('style,link[rel~=stylesheet]')||n.querySelector?.('style,link[rel~=stylesheet]'))sheetsDirty=true}}if(!queued){queued=true;requestAnimationFrame(()=>{flush();if(sheetsDirty){sheetsDirty=false;variables();sheetOverrides()}})}}).observe(document.documentElement,{subtree:true,childList:true,attributes:true,attributeFilter:['class','style']});
-window.__vantageDarkMode={native:false};
+const alreadyDark=()=>{const roots=[document.documentElement,document.body].filter(Boolean);let score=0;for(const e of roots){const s=getComputedStyle(e),b=parse(s.backgroundColor),c=parse(s.color);if(b&&b[3]>.2&&lum(b)<.24)score+=2;if(c&&lum(c)>.55)score++}return score>=3};
+if(alreadyDark()){window.__vantageDarkReaderApplied='native-dark';return;}
+if(!window.DarkReader){console.warn('Vantage Dark Mode: Dark Reader API did not load');return;}
+try{DarkReader.setFetchMethod(window.fetch);DarkReader.enable({brightness:100,contrast:100,sepia:0,darkSchemeBackgroundColor:'#0b0b0c',darkSchemeTextColor:'#e8e6e3'});window.__vantageDarkReaderApplied='darkreader';}
+catch(error){console.error('Vantage Dark Mode: Dark Reader failed',error);}
 })())JS";
+
+std::string dark_reader_source() {
+    static const std::string source = [] {
+        std::vector<std::filesystem::path> candidates;
+        std::error_code error;
+        const auto executable = std::filesystem::read_symlink("/proc/self/exe", error);
+        if (!error) candidates.push_back(executable.parent_path().parent_path() / "assets" / "darkreader.js");
+        candidates.push_back(std::filesystem::current_path() / "assets" / "darkreader.js");
+        for (const auto &path : candidates) {
+            std::ifstream input(path, std::ios::binary);
+            if (!input) continue;
+            std::ostringstream contents;
+            contents << input.rdbuf();
+            if (!contents.str().empty()) return contents.str();
+        }
+        return std::string{};
+    }();
+    return source;
+}
 
 struct TabState {
     vantage::TabId id{};
@@ -786,7 +794,7 @@ std::string internal_page(WindowState *state, std::string_view uri) {
             dark_sites += "<div class=item><div class=details><strong>" + html_escape(domain) + "</strong><span>Dark Mode disabled for this domain.</span></div><a class=setting href='vantage:dark-mode-domain?domain=" + html_escape(domain) + "&disabled=0'>Enable</a></div>";
         if (dark_sites.empty()) dark_sites = "<p class=empty>No per-domain Dark Mode exceptions.</p>";
         content = "<div class=item><div class=details><strong>Dark Mode</strong><span>" + std::string(dark_mode
-                ? "Enabled · Light websites are automatically transformed; sites that are already dark are left unchanged. Ctrl+Shift+D toggles the current domain."
+                ? "Enabled · Dark Reader transforms light websites; sites that are already dark are left unchanged. Ctrl+Shift+D toggles the current domain."
                 : "Disabled · Websites are displayed with their original colours. Enable Dark Mode to transform light websites.")
             + "</span></div><a class=setting href='vantage:dark-mode?enabled=" + (dark_mode ? "0'>Turn off" : "1'>Turn on") + "</a></div>"
             + "<h2 style='font-size:15px;margin:24px 4px 12px'>Disabled websites</h2>" + dark_sites
@@ -1270,7 +1278,15 @@ void load_changed(WebKitWebView *view, WebKitLoadEvent event, TabState *tab) {
     if (vantage::dark_mode_enabled()) {
         const auto domain = uri_host(page_uri);
         if (!vantage::dark_mode_disabled_for_domain(domain))
-            webkit_web_view_evaluate_javascript(view, dark_mode_script, -1, nullptr, nullptr, nullptr, nullptr, nullptr);
+            {
+                const auto &dark_reader = dark_reader_source();
+                if (!dark_reader.empty()) {
+                    const auto script = dark_reader + "\n" + dark_mode_bootstrap;
+                    webkit_web_view_evaluate_javascript(view, script.c_str(), script.size(), nullptr, nullptr, nullptr, nullptr, nullptr);
+                } else {
+                    g_warning("Dark Mode is enabled but assets/darkreader.js is unavailable");
+                }
+            }
     }
     auto *request = new FaviconRequest{tab->window,
         WEBKIT_WEB_VIEW(g_object_ref(view)), nullptr, nullptr, page_uri};
