@@ -6,6 +6,7 @@
 #include "version.h"
 
 #include <exception>
+#include <glib.h>
 #include <iostream>
 #include <string>
 #include <string_view>
@@ -25,6 +26,16 @@ void usage(std::ostream &out) {
 }
 
 int main(int argc, char **argv) {
+    // WebKitGTK derives fallback website-data/cache locations from GLib's
+    // program name.  The executable is intentionally called `vant`, but the
+    // browser profile namespace is `vantage-browser`; set that identity before
+    // any WebKit/GTK object can initialise its process-wide default paths.
+    // Our normal NetworkSession still uses explicit .../vantage-browser/webkit
+    // directories, while any WebKit subsystem that requires a fallback now
+    // stays inside the same Vantage namespace instead of recreating
+    // ~/.local/share/vant (and ~/.cache/vant).
+    g_set_prgname("vantage-browser");
+
     if (argc >= 2 && std::string_view(argv[1]) == "agent") {
         std::vector<std::string_view> args; for (int i=2;i<argc;++i) args.emplace_back(argv[i]);
         return vantage::run_agent_cli(args);
