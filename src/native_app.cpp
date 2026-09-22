@@ -2346,14 +2346,17 @@ void focus_and_select_address(WindowState *state) {
 }
 
 void address_select_all_pressed(GtkGestureClick *gesture, int, double, double, WindowState *state) {
-    // Diagnostic: claim every primary-button click before GtkEntry's own click
-    // gesture can place the caret and clear our selection. If this reliably
-    // highlights the URL, the remaining problem is deciding which clicks to
-    // claim rather than how to select the address text.
     if (gtk_gesture_single_get_current_button(GTK_GESTURE_SINGLE(gesture)) != GDK_BUTTON_PRIMARY)
         return;
-    focus_and_select_address(state);
+
+    // This controller runs in capture phase, before GtkEntry's own click
+    // gesture changes focus or places the caret. Claim only the first click
+    // that enters an unfocused address bar; otherwise leave GtkEntry's normal
+    // caret placement and drag-selection behaviour untouched.
+    if (gtk_widget_has_focus(state->address)) return;
+
     gtk_gesture_set_state(GTK_GESTURE(gesture), GTK_EVENT_SEQUENCE_CLAIMED);
+    focus_and_select_address(state);
 }
 
 gboolean address_key_pressed(GtkEventControllerKey *, guint key, guint, GdkModifierType modifiers,
