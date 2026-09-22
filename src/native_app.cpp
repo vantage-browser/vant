@@ -2082,16 +2082,6 @@ gboolean tab_dropped(GtkDropTarget *, const GValue *, double x, double, WindowSt
     return TRUE;
 }
 
-gboolean tab_dropped_outside_strip(GtkDropTarget *, const GValue *, double, double,
-    WindowState *target) {
-    auto *owner = target->owner;
-    auto *tab = owner->dragging_tab;
-    if (!tab) return FALSE;
-    queue_tab_detach(tab);
-    owner->tab_drop_completed = true;
-    return TRUE;
-}
-
 void header_middle_pressed(GtkGestureClick *gesture, int, double x, double y, WindowState *state) {
     auto *header = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(gesture));
     gtk_gesture_set_state(GTK_GESTURE(gesture), GTK_EVENT_SEQUENCE_CLAIMED);
@@ -3600,13 +3590,12 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     gtk_widget_set_halign(state->address_popover, GTK_ALIGN_FILL);
     gtk_widget_set_valign(state->address_popover, GTK_ALIGN_START);
     gtk_overlay_add_overlay(GTK_OVERLAY(state->chrome_overlay), state->address_popover);
-    if (!state->app_mode) {
-        // The tab strip handles reordering and window-to-window moves. A drop
-        // anywhere else in browser chrome or page content detaches the tab.
-        auto *detach_drop = gtk_drop_target_new(G_TYPE_POINTER, GDK_ACTION_MOVE);
-        g_signal_connect(detach_drop, "drop", G_CALLBACK(tab_dropped_outside_strip), state);
-        gtk_widget_add_controller(state->chrome_overlay, GTK_EVENT_CONTROLLER(detach_drop));
-    }
+    // Do not install a GtkDropTarget on chrome_overlay: it is an ancestor of
+    // every WebKitWebView and would participate in drops over page content.
+    // WebKitGTK installs its own DropTarget on WebKitWebViewBase for HTML5
+    // file drag-and-drop. Tab drops are handled by the tab strip; dropping a
+    // tab elsewhere already reaches tab_drag_cancel()/tab_drag_end(), which
+    // performs the detach without intercepting external file drops.
     gtk_window_set_child(GTK_WINDOW(state->window), state->chrome_overlay);
     install_style(state->window);
 
