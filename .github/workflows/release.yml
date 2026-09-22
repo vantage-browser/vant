@@ -3,9 +3,18 @@ name: Release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing v* tag to release'
+        required: true
+        type: string
 
 permissions:
   contents: write
+
+env:
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
 jobs:
   source-release:
@@ -14,14 +23,17 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ env.RELEASE_TAG }}
       - name: Validate tag and source version
         shell: bash
         run: |
           set -euo pipefail
+          case "$RELEASE_TAG" in v*) ;; *) echo "release tag must start with v" >&2; exit 1;; esac
+          git rev-parse --verify "refs/tags/$RELEASE_TAG" >/dev/null
           source_version=$(sed -n 's/.*version = "\([^"]*\)".*/\1/p' src/version.h)
           test -n "$source_version"
-          test "${GITHUB_REF_NAME}" = "v${source_version}"
-          test "$(git rev-parse HEAD)" = "$(git rev-list -n 1 "${GITHUB_REF_NAME}")"
+          test "$RELEASE_TAG" = "v${source_version}"
+          test "$(git rev-parse HEAD)" = "$(git rev-list -n 1 "$RELEASE_TAG")"
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -31,20 +43,20 @@ jobs:
           make vendor-integrity
           make test
           make test-sanitize
-          test "$(./build/vant --version)" = "Vantage Browser ${GITHUB_REF_NAME#v}"
+          test "$(./build/vant --version)" = "Vantage Browser ${RELEASE_TAG#v}"
       - name: Build immutable source artifact
         shell: bash
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
+          version="${RELEASE_TAG#v}"
           git archive --format=tar --prefix="vant-${version}/" HEAD | gzip -n > vant-source.tar.gz
-          printf '%s\n' "$GITHUB_REF_NAME" > version.txt
+          printf '%s\n' "$RELEASE_TAG" > version.txt
           sha256sum vant-source.tar.gz version.txt > checksums.txt
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-
-          gh release create "$GITHUB_REF_NAME"
+          gh release create "$RELEASE_TAG"
           vant-source.tar.gz version.txt checksums.txt
           --verify-tag --generate-notes
-          --title "Vantage Browser $GITHUB_REF_NAME"
+          --title "Vantage Browser $RELEASE_TAG"

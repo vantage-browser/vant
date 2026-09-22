@@ -2899,36 +2899,79 @@ gboolean web_file_dropped(GtkDropTarget *, const GValue *value, double x, double
     GSList *files = gdk_file_list_get_files(file_list);
     if (!files) return FALSE;
 
+    // Avoid loading an entire file and a second full-size base64 copy into
+    // native memory at once.  Build the JavaScript File from modest Blob
+    // parts instead.  The page still ultimately owns the File bytes, but the
+    // native bridge now has bounded read/base64 working buffers.
+    constexpr gsize kDropChunkSize = 256 * 1024;
+    constexpr goffset kMaxBridgedFileSize = 512LL * 1024 * 1024;
     std::string file_script = "const __files=[];";
     std::size_t count = 0;
     for (auto *item = files; item; item = item->next) {
         auto *file = G_FILE(item->data);
         char *path = g_file_get_path(file);
         if (!path) continue;
-        gchar *contents = nullptr;
-        gsize length = 0;
+
         GError *error = nullptr;
-        if (!g_file_load_contents(file, nullptr, &contents, &length, nullptr, &error)) {
-            g_warning("Unable to read dropped file %s: %s", path, error ? error->message : "unknown error");
+        auto *info = g_file_query_info(file, G_FILE_ATTRIBUTE_STANDARD_SIZE "," G_FILE_ATTRIBUTE_TIME_MODIFIED,
+            G_FILE_QUERY_INFO_NONE, nullptr, &error);
+        if (!info) {
+            g_warning("Unable to inspect dropped file %s: %s", path, error ? error->message : "unknown error");
+            if (error) g_error_free(error);
+            g_free(path);
+            continue;
+        }
+        const auto size = g_file_info_get_size(info);
+        const auto modified = g_file_info_get_attribute_uint64(info, G_FILE_ATTRIBUTE_TIME_MODIFIED);
+        g_object_unref(info);
+        if (size > kMaxBridgedFileSize) {
+            g_warning("Dropped file %s is too large for the WebKitGTK file-drop bridge (%lld bytes; limit %lld)",
+                path, static_cast<long long>(size), static_cast<long long>(kMaxBridgedFileSize));
+            g_free(path);
+            continue;
+        }
+
+        auto *stream = g_file_read(file, nullptr, &error);
+        if (!stream) {
+            g_warning("Unable to open dropped file %s: %s", path, error ? error->message : "unknown error");
             if (error) g_error_free(error);
             g_free(path);
             continue;
         }
         char *basename = g_path_get_basename(path);
         gboolean uncertain = FALSE;
-        char *content_type = g_content_type_guess(path,
-            reinterpret_cast<const guchar *>(contents), std::min<gsize>(length, 4096), &uncertain);
+        char *content_type = g_content_type_guess(path, nullptr, 0, &uncertain);
         char *mime = content_type ? g_content_type_get_mime_type(content_type) : nullptr;
-        char *encoded = g_base64_encode(reinterpret_cast<const guchar *>(contents), length);
-        file_script += "__files.push(new File([Uint8Array.from(atob(" + javascript_string(encoded ? encoded : "") +
-            "),c=>c.charCodeAt(0))]," + javascript_string(basename ? basename : "file") +
-            ",{type:" + javascript_string(mime ? mime : "application/octet-stream") + ",lastModified:Date.now()}));";
-        ++count;
-        g_free(encoded);
+
+        const std::string parts_name = "__parts" + std::to_string(count);
+        file_script += "const " + parts_name + "=[];";
+        std::array<guchar, kDropChunkSize> buffer{};
+        bool read_ok = true;
+        while (true) {
+            const auto bytes_read = g_input_stream_read(G_INPUT_STREAM(stream), buffer.data(), buffer.size(), nullptr, &error);
+            if (bytes_read < 0) {
+                g_warning("Unable to read dropped file %s: %s", path, error ? error->message : "unknown error");
+                if (error) g_error_free(error);
+                error = nullptr;
+                read_ok = false;
+                break;
+            }
+            if (bytes_read == 0) break;
+            char *encoded = g_base64_encode(buffer.data(), static_cast<gsize>(bytes_read));
+            file_script += parts_name + ".push(Uint8Array.from(atob(" + javascript_string(encoded ? encoded : "") +
+                "),c=>c.charCodeAt(0)));";
+            g_free(encoded);
+        }
+        g_object_unref(stream);
+        if (read_ok) {
+            file_script += "__files.push(new File(" + parts_name + "," + javascript_string(basename ? basename : "file") +
+                ",{type:" + javascript_string(mime ? mime : "application/octet-stream") +
+                ",lastModified:" + std::to_string(modified * 1000ULL) + "}));";
+            ++count;
+        }
         g_free(mime);
         g_free(content_type);
         g_free(basename);
-        g_free(contents);
         g_free(path);
     }
     g_slist_free(files);
@@ -2942,9 +2985,6 @@ gboolean web_file_dropped(GtkDropTarget *, const GValue *value, double x, double
            << "let __t=document.elementFromPoint(" << x << ',' << y << ")||document.body||document.documentElement;"
            << "if(!__t)return false;const __drop=new DragEvent('drop',{bubbles:true,cancelable:true,composed:true,"
            << "dataTransfer:__dt,clientX:" << x << ",clientY:" << y << "});__t.dispatchEvent(__drop);"
-           // Some applications keep a drag-depth counter.  A final leave on
-           // the same target mirrors the native session ending and reliably
-           // clears overlays after a successful drop.
            << "const __leave=new DragEvent('dragleave',{bubbles:true,cancelable:false,composed:true,dataTransfer:__dt,"
            << "clientX:" << x << ",clientY:" << y << "});(__old&&__old.target?__old.target:__t).dispatchEvent(__leave);"
            << "delete globalThis[__k];return true;})()";
