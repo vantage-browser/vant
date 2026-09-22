@@ -2320,8 +2320,37 @@ void suggestion_row_entered(GtkEventControllerMotion *controller, double, double
     activate_suggestion_row(button);
 }
 
-void dismiss_suggestions_on_click(GtkGestureClick *, int, double, double, WindowState *state) {
-    if (gtk_widget_get_visible(state->address_popover) && !state->suggestions_hovered)
+bool widget_is_or_descends_from(GtkWidget *widget, GtkWidget *ancestor) {
+    return widget && ancestor && (widget == ancestor || gtk_widget_is_ancestor(widget, ancestor));
+}
+
+void browser_click_pressed(GtkGestureClick *gesture, int, double x, double y, WindowState *state) {
+    if (gtk_gesture_single_get_current_button(GTK_GESTURE_SINGLE(gesture)) != GDK_BUTTON_PRIMARY)
+        return;
+
+    // Observe the click at the window in capture phase, before GtkEntry changes
+    // focus or places the caret. Picking here gives us the actual target while
+    // gtk_root_get_focus() still describes the pre-click focus state.
+    auto *target = gtk_widget_pick(state->window, x, y, GTK_PICK_DEFAULT);
+    const bool address_click = widget_is_or_descends_from(target, state->address);
+    const bool suggestion_click = widget_is_or_descends_from(target, state->address_popover);
+
+    if (address_click) {
+        auto *focused = gtk_root_get_focus(GTK_ROOT(state->window));
+        const bool address_had_focus = widget_is_or_descends_from(focused, state->address);
+        if (!address_had_focus) {
+            // Claim only the first click into an unfocused address bar so
+            // GtkEntry cannot immediately replace the select-all with a caret.
+            gtk_gesture_set_state(GTK_GESTURE(gesture), GTK_EVENT_SEQUENCE_CLAIMED);
+            focus_and_select_address(state);
+        }
+        return;
+    }
+
+    // Dismiss suggestions on any click outside both the address bar and the
+    // suggestions themselves. Doing this in capture phase also catches clicks
+    // inside WebKit, which do not reliably bubble to the GtkWindow controller.
+    if (!suggestion_click && gtk_widget_get_visible(state->address_popover))
         hide_address_suggestions(state);
 }
 
@@ -2343,20 +2372,6 @@ void focus_and_select_address(WindowState *state) {
     state->address_submission_dismissed = false;
     gtk_widget_grab_focus(state->address);
     gtk_editable_select_region(GTK_EDITABLE(state->address), 0, -1);
-}
-
-void address_select_all_pressed(GtkGestureClick *gesture, int, double, double, WindowState *state) {
-    if (gtk_gesture_single_get_current_button(GTK_GESTURE_SINGLE(gesture)) != GDK_BUTTON_PRIMARY)
-        return;
-
-    // This controller runs in capture phase, before GtkEntry's own click
-    // gesture changes focus or places the caret. Claim only the first click
-    // that enters an unfocused address bar; otherwise leave GtkEntry's normal
-    // caret placement and drag-selection behaviour untouched.
-    if (gtk_widget_has_focus(state->address)) return;
-
-    gtk_gesture_set_state(GTK_GESTURE(gesture), GTK_EVENT_SEQUENCE_CLAIMED);
-    focus_and_select_address(state);
 }
 
 gboolean address_key_pressed(GtkEventControllerKey *, guint key, guint, GdkModifierType modifiers,
@@ -3599,15 +3614,11 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     g_signal_connect(state->reload_stop, "clicked", G_CALLBACK(reload_or_stop), state);
     g_signal_connect(state->address, "activate", G_CALLBACK(submit_address), state);
     g_signal_connect(state->address, "changed", G_CALLBACK(address_changed), state);
-    auto *address_select_click = gtk_gesture_click_new();
-    gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(address_select_click), GDK_BUTTON_PRIMARY);
-    gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(address_select_click), GTK_PHASE_CAPTURE);
-    g_signal_connect(address_select_click, "pressed", G_CALLBACK(address_select_all_pressed), state);
-    gtk_widget_add_controller(state->address, GTK_EVENT_CONTROLLER(address_select_click));
-    auto *dismiss_click = gtk_gesture_click_new();
-    gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(dismiss_click), GTK_PHASE_BUBBLE);
-    g_signal_connect(dismiss_click, "pressed", G_CALLBACK(dismiss_suggestions_on_click), state);
-    gtk_widget_add_controller(state->window, GTK_EVENT_CONTROLLER(dismiss_click));
+    auto *browser_click = gtk_gesture_click_new();
+    gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(browser_click), GDK_BUTTON_PRIMARY);
+    gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(browser_click), GTK_PHASE_CAPTURE);
+    g_signal_connect(browser_click, "pressed", G_CALLBACK(browser_click_pressed), state);
+    gtk_widget_add_controller(state->window, GTK_EVENT_CONTROLLER(browser_click));
     g_signal_connect(state->window, "notify::is-active", G_CALLBACK(window_active_changed), state);
     auto *address_keys = gtk_event_controller_key_new();
     gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(address_keys), GTK_PHASE_CAPTURE);
