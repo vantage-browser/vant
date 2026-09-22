@@ -163,6 +163,7 @@ struct WindowState {
     double suggestion_pointer_y{};
     double progress_fraction{};
     gint64 last_tab_scroll{};
+    gint64 address_focused_at{};
     unsigned find_current{};
     unsigned find_total{};
     unsigned find_generation{};
@@ -2344,8 +2345,15 @@ gboolean select_address_deferred(void *data) {
     return G_SOURCE_REMOVE;
 }
 
-void address_pressed(GtkGestureClick *, int, double, double, WindowState *state) {
-    if (!gtk_widget_has_focus(state->address)) g_idle_add(select_address_deferred, state);
+void address_focus_changed(GObject *address, GParamSpec *, WindowState *state) {
+    if (gtk_widget_has_focus(GTK_WIDGET(address))) state->address_focused_at = g_get_monotonic_time();
+}
+
+void address_released(GtkGestureClick *, int, double, double, WindowState *state) {
+    if (!state->address_focused_at) return;
+    constexpr gint64 first_click_window_us = 200 * 1000;
+    const auto elapsed = g_get_monotonic_time() - state->address_focused_at;
+    if (elapsed >= 0 && elapsed <= first_click_window_us) g_idle_add(select_address_deferred, state);
 }
 
 gboolean address_key_pressed(GtkEventControllerKey *, guint key, guint, GdkModifierType modifiers,
@@ -3590,9 +3598,10 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     g_signal_connect(state->reload_stop, "clicked", G_CALLBACK(reload_or_stop), state);
     g_signal_connect(state->address, "activate", G_CALLBACK(submit_address), state);
     g_signal_connect(state->address, "changed", G_CALLBACK(address_changed), state);
+    g_signal_connect(state->address, "notify::has-focus", G_CALLBACK(address_focus_changed), state);
     auto *address_click = gtk_gesture_click_new();
     gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(address_click), GDK_BUTTON_PRIMARY);
-    g_signal_connect(address_click, "pressed", G_CALLBACK(address_pressed), state);
+    g_signal_connect(address_click, "released", G_CALLBACK(address_released), state);
     gtk_widget_add_controller(state->address, GTK_EVENT_CONTROLLER(address_click));
     auto *dismiss_click = gtk_gesture_click_new();
     gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(dismiss_click), GTK_PHASE_BUBBLE);
