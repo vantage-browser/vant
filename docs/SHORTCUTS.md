@@ -15,12 +15,13 @@
 | `Ctrl+H` | Open history |
 | `Ctrl+J` | Open downloads |
 | `Ctrl+D` | Add or remove the active page bookmark |
+| `Ctrl+Shift+D` | Toggle Dark Mode for the current domain (when Dark Mode is enabled) |
 | `Ctrl+Shift+Delete` | Delete browsing history |
 | `Ctrl+P` | Print the active page |
 | `F11` | Enter or leave fullscreen |
 
 `Ctrl+N`, `Ctrl+Shift+N`, `Ctrl+T`, `Ctrl+W`, `Ctrl+L`, `Ctrl+R`, `Ctrl+H`,
-`Ctrl+J`, `Ctrl+D`, `Ctrl+Shift+Delete`, `Ctrl+P`, `F5`, `F11`, `Alt+Left`, `Alt+Right`
+`Ctrl+J`, `Ctrl+D`, `Ctrl+Shift+D`, `Ctrl+Shift+Delete`, `Ctrl+P`, `F5`, `F11`, `Alt+Left`, `Alt+Right`
 and `Escape` are connected to the native GTK shell. Reopen-tab and command-palette
 defaults will be connected as their native surfaces land. Find
 opens over the top-right of the page; Enter advances to the next match, and Escape

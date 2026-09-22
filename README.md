@@ -11,7 +11,7 @@ so website logins survive browser restarts, while private windows remain
 ephemeral. It also includes the v0.1.5 tab-strip overflow fixes and the earlier
 tab sizing and agent robustness improvements. The
 native shell provides tabs, navigation
-controls, persistent bookmarks, searchable history and downloads, private
+controls, optional luminance-aware Dark Mode with per-domain exceptions, persistent bookmarks, searchable history and downloads, private
 windows, printing, zoom controls and familiar Chromium-style keyboard
 shortcuts. Bookmarks can be added, edited and bulk-removed; history supports
 bulk removal; downloads expose live byte progress, recent activity, link

@@ -1,7 +1,9 @@
 #include "preferences.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <fstream>
+#include <map>
 #include <stdexcept>
 #include <string>
 
@@ -16,51 +18,114 @@ std::filesystem::path config_root() {
     throw std::runtime_error("cannot determine Vantage configuration directory");
 }
 
-} // namespace
-
-namespace vantage {
-
-std::filesystem::path preferences_path() {
-    return config_root() / "vantage-browser" / "preferences.conf";
-}
-
-bool compatibility_video_rendering() {
-    std::ifstream input(preferences_path());
+std::map<std::string, std::string> read_preferences() {
+    std::map<std::string, std::string> values;
+    std::ifstream input(vantage::preferences_path());
     std::string line;
     while (std::getline(input, line)) {
-        // v1 defaulted compatibility rendering on.  That forces
-        // WEBKIT_DISABLE_COMPOSITING_MODE=1, which can hang/crash modern
-        // WebKitGTK pages (including ChatGPT/Google authentication).  Ignore
-        // the legacy key so existing profiles migrate to accelerated mode;
-        // only an explicit v2 preference may opt back into compatibility mode.
-        if (line == "compatibility_video_rendering_v2=0") return false;
-        if (line == "compatibility_video_rendering_v2=1") return true;
+        const auto split = line.find('=');
+        if (split != std::string::npos) values[line.substr(0, split)] = line.substr(split + 1);
     }
-    return false;
+    return values;
 }
 
-void set_compatibility_video_rendering(bool enabled) {
-    const auto path = preferences_path();
+void write_preferences(const std::map<std::string, std::string> &values) {
+    const auto path = vantage::preferences_path();
     std::filesystem::create_directories(path.parent_path());
     const auto temporary = path.string() + ".new";
     {
         std::ofstream output(temporary, std::ios::trunc);
         if (!output) throw std::runtime_error("cannot write Vantage preferences");
-        output << "compatibility_video_rendering_v2=" << (enabled ? '1' : '0') << '\n';
+        for (const auto &[key, value] : values) output << key << '=' << value << '\n';
         output.flush();
         if (!output) throw std::runtime_error("cannot write Vantage preferences");
     }
     std::filesystem::rename(temporary, path);
 }
 
+std::vector<std::string> split_domains(const std::string &value) {
+    std::vector<std::string> domains;
+    std::size_t start = 0;
+    while (start <= value.size()) {
+        const auto end = value.find('|', start);
+        auto domain = value.substr(start, end == std::string::npos ? std::string::npos : end - start);
+        if (!domain.empty()) domains.push_back(std::move(domain));
+        if (end == std::string::npos) break;
+        start = end + 1;
+    }
+    std::sort(domains.begin(), domains.end());
+    domains.erase(std::unique(domains.begin(), domains.end()), domains.end());
+    return domains;
+}
+
+std::string join_domains(const std::vector<std::string> &domains) {
+    std::string result;
+    for (const auto &domain : domains) {
+        if (!result.empty()) result += '|';
+        result += domain;
+    }
+    return result;
+}
+
+} // namespace
+
+namespace vantage {
+
+std::filesystem::path preferences_path() { return config_root() / "vantage-browser" / "preferences.conf"; }
+
+bool compatibility_video_rendering() {
+    const auto values = read_preferences();
+    const auto found = values.find("compatibility_video_rendering_v2");
+    return found != values.end() && found->second == "1";
+}
+
+void set_compatibility_video_rendering(bool enabled) {
+    auto values = read_preferences();
+    values["compatibility_video_rendering_v2"] = enabled ? "1" : "0";
+    write_preferences(values);
+}
+
 void apply_video_rendering_environment(bool enabled) {
     if (enabled) {
         if (setenv("WEBKIT_DISABLE_COMPOSITING_MODE", "1", 1) != 0)
             throw std::runtime_error("cannot enable compatibility video rendering");
-    } else {
-        if (unsetenv("WEBKIT_DISABLE_COMPOSITING_MODE") != 0)
-            throw std::runtime_error("cannot enable accelerated video rendering");
-    }
+    } else if (unsetenv("WEBKIT_DISABLE_COMPOSITING_MODE") != 0)
+        throw std::runtime_error("cannot enable accelerated video rendering");
+}
+
+bool dark_mode_enabled() {
+    const auto values = read_preferences();
+    const auto found = values.find("dark_mode");
+    return found != values.end() && found->second == "1";
+}
+
+void set_dark_mode_enabled(bool enabled) {
+    auto values = read_preferences();
+    values["dark_mode"] = enabled ? "1" : "0";
+    write_preferences(values);
+}
+
+std::vector<std::string> dark_mode_disabled_domains() {
+    const auto values = read_preferences();
+    const auto found = values.find("dark_mode_disabled_domains");
+    return found == values.end() ? std::vector<std::string>{} : split_domains(found->second);
+}
+
+bool dark_mode_disabled_for_domain(const std::string &domain) {
+    const auto domains = dark_mode_disabled_domains();
+    return std::find(domains.begin(), domains.end(), domain) != domains.end();
+}
+
+void set_dark_mode_disabled_for_domain(const std::string &domain, bool disabled) {
+    if (domain.empty() || domain.find('|') != std::string::npos) return;
+    auto values = read_preferences();
+    auto domains = dark_mode_disabled_domains();
+    const auto found = std::find(domains.begin(), domains.end(), domain);
+    if (disabled && found == domains.end()) domains.push_back(domain);
+    if (!disabled && found != domains.end()) domains.erase(found);
+    std::sort(domains.begin(), domains.end());
+    values["dark_mode_disabled_domains"] = join_domains(domains);
+    write_preferences(values);
 }
 
 } // namespace vantage
