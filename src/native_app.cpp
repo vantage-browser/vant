@@ -2833,6 +2833,69 @@ gboolean on_script_dialog(WebKitWebView *, WebKitScriptDialog *dialog) {
     return TRUE;
 }
 
+
+// WebKitGTK 2.52 currently negotiates desktop file drags as URI/text on some
+// GTK4/Wayland stacks (the same behaviour is reproducible in MiniBrowser).
+// Prefer GTK's native GdkFileList ourselves and recreate the user-initiated
+// HTML drop with real File objects, so web apps receive files rather than
+// file:/// paths. This is intentionally attached directly to each WebView and
+// only accepts GDK_TYPE_FILE_LIST; all non-file drag-and-drop remains WebKit's.
+gboolean web_file_dropped(GtkDropTarget *, const GValue *value, double x, double y, TabState *tab) {
+    if (!tab || !tab->view || G_VALUE_TYPE(value) != GDK_TYPE_FILE_LIST) return FALSE;
+    auto *file_list = static_cast<GdkFileList *>(g_value_get_boxed(value));
+    if (!file_list) return FALSE;
+    GSList *files = gdk_file_list_get_files(file_list);
+    if (!files) return FALSE;
+
+    std::string file_script = "const __files=[];";
+    std::size_t count = 0;
+    for (auto *item = files; item; item = item->next) {
+        auto *file = G_FILE(item->data);
+        char *path = g_file_get_path(file);
+        if (!path) continue;
+        gchar *contents = nullptr;
+        gsize length = 0;
+        GError *error = nullptr;
+        if (!g_file_load_contents(file, nullptr, &contents, &length, nullptr, &error)) {
+            g_warning("Unable to read dropped file %s: %s", path, error ? error->message : "unknown error");
+            if (error) g_error_free(error);
+            g_free(path);
+            continue;
+        }
+        char *basename = g_path_get_basename(path);
+        gboolean uncertain = FALSE;
+        char *content_type = g_content_type_guess(path,
+            reinterpret_cast<const guchar *>(contents), std::min<gsize>(length, 4096), &uncertain);
+        char *mime = content_type ? g_content_type_get_mime_type(content_type) : nullptr;
+        char *encoded = g_base64_encode(reinterpret_cast<const guchar *>(contents), length);
+        file_script += "__files.push(new File([Uint8Array.from(atob(" + javascript_string(encoded ? encoded : "") +
+            "),c=>c.charCodeAt(0))]," + javascript_string(basename ? basename : "file") +
+            ",{type:" + javascript_string(mime ? mime : "application/octet-stream") + ",lastModified:Date.now()}));";
+        ++count;
+        g_free(encoded);
+        g_free(mime);
+        g_free(content_type);
+        g_free(basename);
+        g_free(contents);
+        g_free(path);
+    }
+    g_slist_free(files);
+    if (!count) return FALSE;
+
+    std::ostringstream script;
+    script << "(()=>{" << file_script
+           << "const __dt=new DataTransfer();for(const __f of __files)__dt.items.add(__f);"
+           << "let __t=document.elementFromPoint(" << x << ',' << y << ")||document.body||document.documentElement;"
+           << "if(!__t)return false;"
+           << "for(const __type of ['dragenter','dragover','drop']){"
+           << "const __e=new DragEvent(__type,{bubbles:true,cancelable:true,composed:true,dataTransfer:__dt,clientX:"
+           << x << ",clientY:" << y << "});__t.dispatchEvent(__e);}return true;})()";
+    const auto source = script.str();
+    webkit_web_view_evaluate_javascript(tab->view, source.c_str(), source.size(), nullptr,
+        "vantage-file-drop://desktop", nullptr, nullptr, nullptr);
+    return TRUE;
+}
+
 TabState *new_tab(WindowState *state, const std::string &uri, bool load_initial) {
     if (state->app_mode && !state->tabs.empty()) {
         create_window(state->owner, uri, false, state, state->private_mode);
@@ -2875,6 +2938,11 @@ TabState *new_tab(WindowState *state, const std::string &uri, bool load_initial)
     webkit_user_style_sheet_unref(find_style);
     tab->page = GTK_WIDGET(tab->view);
     gtk_widget_set_vexpand(tab->page, TRUE);
+    // Work around WebKitGTK/GTK4 offering desktop files to pages as URI text.
+    // A native file-list target lets Vantage preserve HTML File semantics.
+    auto *file_drop = gtk_drop_target_new(GDK_TYPE_FILE_LIST, GDK_ACTION_COPY);
+    g_signal_connect(file_drop, "drop", G_CALLBACK(web_file_dropped), tab);
+    gtk_widget_add_controller(tab->page, GTK_EVENT_CONTROLLER(file_drop));
     gtk_stack_add_child(GTK_STACK(state->stack), tab->page);
 
     tab->tab = gtk_overlay_new();
