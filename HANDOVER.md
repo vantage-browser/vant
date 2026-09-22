@@ -6,11 +6,10 @@ Ubuntu/Omarchy on Wayland. The product goal is a genuinely useful daily browser
 with a smaller operational footprint and a calmer interface than a general
 purpose Chromium distribution.
 
-Version 0.1.4 is the current released version, following v0.1.3 and
-including corrected tab sizing (the window can now shrink well below
-`tabs * 184px`, opened tabs no longer stack invisibly, and new tabs no longer
-flash white) plus agent robustness fixes for strict-CSP pages and blocking
-JavaScript dialogs.
+Version 0.1.6 is the current released version. It adds persistent normal-profile
+cookies so website logins survive browser restarts while private windows remain
+ephemeral, and includes the v0.1.5 tab-strip overflow fixes plus the earlier tab
+sizing and agent robustness improvements.
 Only behavior backed by implemented code and retained evidence is shipped;
 broader support, security, compatibility and performance claims remain
 prohibited until their checkpoints are accepted.

@@ -1,4 +1,27 @@
-# Vantage Browser v0.1.4
+# Vantage Browser v0.1.6
+
+Vantage Browser v0.1.6 fixes normal-profile login persistence and includes the
+v0.1.5 tab-strip overflow improvements. Agent protocol 1 remains **stable** and
+unchanged.
+
+## Login persistence
+
+Normal Vantage sessions now configure WebKitGTK's cookie manager with a
+persistent SQLite cookie store under the existing `vantage-browser/webkit`
+profile directory. Persistent website logins therefore survive a complete
+browser restart as expected. Private windows continue to use an ephemeral
+network session and do not persist their cookies.
+
+## Tab strip
+
+The v0.1.5 changes cap the tab strip minimum and hide tabs that overflow the
+available window width, preserving the favicon at the minimum visible tab width
+and avoiding the previous ellipsis-only overflow state.
+
+## Version
+
+- Vantage Browser: 0.1.6
+- Agent protocol: 1 (unchanged)
 
 Vantage Browser v0.1.4 builds on the v0.1.3 release with a corrected tab
 sizing model, fixes for newly opened tabs, a dark new-tab background, and two

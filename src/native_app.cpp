@@ -3925,6 +3925,15 @@ int run_native(const NativeLaunchOptions &options) {
         std::filesystem::create_directories(web_cache);
         state.network_session = webkit_network_session_new(
             web_data.c_str(), web_cache.c_str());
+
+        // A persistent WebKitNetworkSession persists website data such as
+        // localStorage and IndexedDB, but WebKitCookieManager does not persist
+        // cookies unless an explicit cookie store is configured. Keep normal
+        // profile cookies alongside the rest of the WebKit profile data.
+        const auto cookie_store = web_data / "cookies.sqlite";
+        auto *cookie_manager = webkit_network_session_get_cookie_manager(state.network_session);
+        webkit_cookie_manager_set_persistent_storage(
+            cookie_manager, cookie_store.c_str(), WEBKIT_COOKIE_PERSISTENT_STORAGE_SQLITE);
     }
     state.data = std::make_unique<UserDataStore>(
         std::filesystem::path(g_get_user_data_dir()) / "vantage-browser" / "browser.sqlite3",

@@ -6,10 +6,10 @@ WebKitGTK renders untrusted web content. A pinned copy of JS++ provides a
 separate, capability-limited automation runtime and is never used to execute
 page JavaScript.
 
-Version 0.1.4 is the current release, building on v0.1.3 with a corrected tab
-sizing model (windows can now shrink below `tabs * 184px`, tabs no longer
-stack invisibly when opened, and new tabs no longer flash white), plus agent
-robustness fixes for strict-CSP pages and blocking JavaScript dialogs. The
+Version 0.1.6 is the current release. It adds persistent normal-profile cookies
+so website logins survive browser restarts, while private windows remain
+ephemeral. It also includes the v0.1.5 tab-strip overflow fixes and the earlier
+tab sizing and agent robustness improvements. The
 native shell provides tabs, navigation
 controls, persistent bookmarks, searchable history and downloads, private
 windows, printing, zoom controls and familiar Chromium-style keyboard
@@ -194,7 +194,7 @@ are maintained in [HANDOVER.md](HANDOVER.md). More focused notes live under
 
 ## Project status
 
-Vantage v0.1.4 is a released development-line browser. The native GTK/WebKitGTK
+Vantage v0.1.6 is a released development-line browser. The native GTK/WebKitGTK
 shell, fail-closed navigation policy, widget-independent tabs, SQLite session
 recovery, private in-memory profiles, bookmarks/permissions/downloads, the
 deterministic vendored JS++ snapshot and default-deny JS++ automation are
