@@ -103,6 +103,7 @@ struct TabState {
     bool recovering_blank_navigation{};
     std::string last_load_error;
     std::string last_web_process_termination;
+    bool web_file_drag_active{};
 };
 
 struct WindowState {
@@ -2836,10 +2837,61 @@ gboolean on_script_dialog(WebKitWebView *, WebKitScriptDialog *dialog) {
 
 // WebKitGTK 2.52 currently negotiates desktop file drags as URI/text on some
 // GTK4/Wayland stacks (the same behaviour is reproducible in MiniBrowser).
-// Prefer GTK's native GdkFileList ourselves and recreate the user-initiated
-// HTML drop with real File objects, so web apps receive files rather than
-// file:/// paths. This is intentionally attached directly to each WebView and
-// only accepts GDK_TYPE_FILE_LIST; all non-file drag-and-drop remains WebKit's.
+// Prefer GTK's native GdkFileList ourselves and mirror the native drag
+// lifecycle into the page.  The early dragenter/dragover events carry a tiny
+// placeholder File so applications such as ChatGPT can recognise a Files drag
+// and show their drop affordance before the user releases the mouse.  The
+// actual drop event is populated with the real files below.
+void evaluate_file_drag_event(TabState *tab, const char *type, double x, double y, bool with_placeholder) {
+    if (!tab || !tab->view) return;
+    std::ostringstream script;
+    script << "(()=>{const __k='__vantageDesktopFileDrag';let __s=globalThis[__k];";
+    if (with_placeholder) {
+        script << "if(!__s){const __dt=new DataTransfer();__dt.items.add(new File([new Uint8Array(0)],"
+               << "'vantage-drag',{type:'application/octet-stream'}));__s=globalThis[__k]={dt:__dt,target:null};}";
+    }
+    script << "if(!__s)return false;let __t=document.elementFromPoint(" << x << ',' << y
+           << ")||__s.target||document.body||document.documentElement;if(!__t)return false;";
+    if (std::string_view(type) == "dragleave") {
+        script << "__t=__s.target||__t;";
+    } else {
+        script << "__s.target=__t;";
+    }
+    script << "const __e=new DragEvent(" << javascript_string(type)
+           << ",{bubbles:true,cancelable:true,composed:true,dataTransfer:__s.dt,clientX:" << x
+           << ",clientY:" << y << "});__t.dispatchEvent(__e);";
+    if (std::string_view(type) == "dragleave")
+        script << "delete globalThis[__k];";
+    script << "return true;})()";
+    const auto source = script.str();
+    webkit_web_view_evaluate_javascript(tab->view, source.c_str(), source.size(), nullptr,
+        "vantage-file-drag://desktop", nullptr, nullptr, nullptr);
+}
+
+GdkDragAction web_file_drag_enter(GtkDropTarget *, double x, double y, TabState *tab) {
+    if (!tab) return GDK_ACTION_COPY;
+    tab->web_file_drag_active = true;
+    evaluate_file_drag_event(tab, "dragenter", x, y, true);
+    evaluate_file_drag_event(tab, "dragover", x, y, true);
+    return GDK_ACTION_COPY;
+}
+
+GdkDragAction web_file_drag_motion(GtkDropTarget *, double x, double y, TabState *tab) {
+    if (!tab) return GDK_ACTION_COPY;
+    if (!tab->web_file_drag_active) {
+        tab->web_file_drag_active = true;
+        evaluate_file_drag_event(tab, "dragenter", x, y, true);
+    }
+    evaluate_file_drag_event(tab, "dragover", x, y, true);
+    return GDK_ACTION_COPY;
+}
+
+void web_file_drag_leave(GtkDropTarget *, TabState *tab) {
+    if (!tab || !tab->web_file_drag_active) return;
+    tab->web_file_drag_active = false;
+    evaluate_file_drag_event(tab, "dragleave", 0, 0, false);
+}
+
 gboolean web_file_dropped(GtkDropTarget *, const GValue *value, double x, double y, TabState *tab) {
     if (!tab || !tab->view || G_VALUE_TYPE(value) != GDK_TYPE_FILE_LIST) return FALSE;
     auto *file_list = static_cast<GdkFileList *>(g_value_get_boxed(value));
@@ -2882,14 +2934,20 @@ gboolean web_file_dropped(GtkDropTarget *, const GValue *value, double x, double
     g_slist_free(files);
     if (!count) return FALSE;
 
+    tab->web_file_drag_active = false;
     std::ostringstream script;
     script << "(()=>{" << file_script
+           << "const __k='__vantageDesktopFileDrag';const __old=globalThis[__k];"
            << "const __dt=new DataTransfer();for(const __f of __files)__dt.items.add(__f);"
            << "let __t=document.elementFromPoint(" << x << ',' << y << ")||document.body||document.documentElement;"
-           << "if(!__t)return false;"
-           << "for(const __type of ['dragenter','dragover','drop']){"
-           << "const __e=new DragEvent(__type,{bubbles:true,cancelable:true,composed:true,dataTransfer:__dt,clientX:"
-           << x << ",clientY:" << y << "});__t.dispatchEvent(__e);}return true;})()";
+           << "if(!__t)return false;const __drop=new DragEvent('drop',{bubbles:true,cancelable:true,composed:true,"
+           << "dataTransfer:__dt,clientX:" << x << ",clientY:" << y << "});__t.dispatchEvent(__drop);"
+           // Some applications keep a drag-depth counter.  A final leave on
+           // the same target mirrors the native session ending and reliably
+           // clears overlays after a successful drop.
+           << "const __leave=new DragEvent('dragleave',{bubbles:true,cancelable:false,composed:true,dataTransfer:__dt,"
+           << "clientX:" << x << ",clientY:" << y << "});(__old&&__old.target?__old.target:__t).dispatchEvent(__leave);"
+           << "delete globalThis[__k];return true;})()";
     const auto source = script.str();
     webkit_web_view_evaluate_javascript(tab->view, source.c_str(), source.size(), nullptr,
         "vantage-file-drop://desktop", nullptr, nullptr, nullptr);
@@ -2941,6 +2999,9 @@ TabState *new_tab(WindowState *state, const std::string &uri, bool load_initial)
     // Work around WebKitGTK/GTK4 offering desktop files to pages as URI text.
     // A native file-list target lets Vantage preserve HTML File semantics.
     auto *file_drop = gtk_drop_target_new(GDK_TYPE_FILE_LIST, GDK_ACTION_COPY);
+    g_signal_connect(file_drop, "enter", G_CALLBACK(web_file_drag_enter), tab);
+    g_signal_connect(file_drop, "motion", G_CALLBACK(web_file_drag_motion), tab);
+    g_signal_connect(file_drop, "leave", G_CALLBACK(web_file_drag_leave), tab);
     g_signal_connect(file_drop, "drop", G_CALLBACK(web_file_dropped), tab);
     gtk_widget_add_controller(tab->page, GTK_EVENT_CONTROLLER(file_drop));
     gtk_stack_add_child(GTK_STACK(state->stack), tab->page);
