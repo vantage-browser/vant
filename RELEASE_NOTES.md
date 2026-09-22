@@ -1,6 +1,6 @@
-# Vantage Browser v0.1.9
+# Vantage Browser v0.1.10
 
-Vantage Browser v0.1.9 fixes normal-profile login persistence and includes the
+Vantage Browser v0.1.10 fixes normal-profile login persistence and includes the
 v0.1.5 tab-strip overflow improvements. Agent protocol 1 remains **stable** and
 unchanged.
 
@@ -27,7 +27,7 @@ and avoiding the previous ellipsis-only overflow state.
 
 ## Version
 
-- Vantage Browser: 0.1.9
+- Vantage Browser: 0.1.10
 - Agent protocol: 1 (unchanged)
 
 Vantage Browser v0.1.4 builds on the v0.1.3 release with a corrected tab

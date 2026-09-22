@@ -6,7 +6,7 @@ Ubuntu/Omarchy on Wayland. The product goal is a genuinely useful daily browser
 with a smaller operational footprint and a calmer interface than a general
 purpose Chromium distribution.
 
-Version 0.1.9 is the current released version. It adds persistent normal-profile
+Version 0.1.10 is the current released version. It adds persistent normal-profile
 cookies so website logins survive browser restarts while private windows remain
 ephemeral, and includes the v0.1.5 tab-strip overflow fixes plus the earlier tab
 sizing and agent robustness improvements.
