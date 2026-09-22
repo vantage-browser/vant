@@ -322,3 +322,8 @@ rehearsed. A failed gate stops the release; do not weaken or silently skip it.
 - Treat generated files, caches, profiles, downloads and benchmark output as
   disposable unless a documented evidence path explicitly retains them.
 - Consolidate durable decisions here instead of appending an unstructured diary.
+
+
+## Release feature regression checklist
+
+Before release, dogfood at minimum: tab create/close/reorder/overflow, navigation and reload, normal-profile login persistence, private-session non-persistence, history, bookmarks, downloads, find, page source, DevTools (`F12`, `Ctrl+Shift+I`, Inspect Element), fullscreen, session restore, agent fetch/API, and representative OAuth/login flows. Accepted functionality should be committed before moving to the next checkpoint.

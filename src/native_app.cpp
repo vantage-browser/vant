@@ -458,6 +458,13 @@ void context_open(GSimpleAction *, GVariant *, void *data) {
 }
 
 enum class PageActionKind { save, print, source };
+
+void show_devtools(TabState *tab) {
+    if (!tab || tab->closing || !tab->view) return;
+    auto *inspector = webkit_web_view_get_inspector(tab->view);
+    if (inspector) webkit_web_inspector_show(inspector);
+}
+
 struct PageActionData { TabState *tab{}; PageActionKind kind{}; };
 struct PageSaveData { GtkFileDialog *dialog{}; WebKitWebView *view{}; };
 
@@ -594,6 +601,8 @@ gboolean context_menu(WebKitWebView *, WebKitContextMenu *menu,
     append_page_action(menu, tab, "Print…", PageActionKind::print);
     webkit_context_menu_append(menu, webkit_context_menu_item_new_separator());
     append_page_action(menu, tab, "View page source", PageActionKind::source);
+    webkit_context_menu_append(menu, webkit_context_menu_item_new_from_stock_action(
+        WEBKIT_CONTEXT_MENU_ACTION_INSPECT_ELEMENT));
     return FALSE;
 }
 
@@ -2710,6 +2719,9 @@ TabState *new_tab(WindowState *state, const std::string &uri, bool load_initial)
         ? WEBKIT_WEB_VIEW(g_object_new(WEBKIT_TYPE_WEB_VIEW, "network-session", state->private_session, nullptr))
         : WEBKIT_WEB_VIEW(g_object_new(WEBKIT_TYPE_WEB_VIEW, "network-session",
               state->owner->network_session, nullptr));
+    // DevTools are intentionally available in both normal and private windows.
+    // WebKit disables its inspector unless developer extras are enabled per view.
+    webkit_settings_set_enable_developer_extras(webkit_web_view_get_settings(tab->view), TRUE);
     // The webview's default background is opaque white, which flashes before
     // the (dark) page HTML has rendered whenever a tab is shown. Paint the
     // view with the window's dark background so that moment is dark instead of
@@ -2971,6 +2983,10 @@ gboolean key_pressed(GtkEventControllerKey *, guint keyval, guint,
     const bool control = (modifiers & GDK_CONTROL_MASK) != 0;
     const bool shift = (modifiers & GDK_SHIFT_MASK) != 0;
     const bool alternate = (modifiers & GDK_ALT_MASK) != 0;
+    if (keyval == GDK_KEY_F12 || (control && shift && (keyval == GDK_KEY_i || keyval == GDK_KEY_I))) {
+        show_devtools(find_tab(state, state->view));
+        return TRUE;
+    }
     if (keyval == GDK_KEY_F11) {
         if (gtk_window_is_fullscreen(GTK_WINDOW(state->window)))
             gtk_window_unfullscreen(GTK_WINDOW(state->window));

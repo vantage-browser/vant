@@ -12,6 +12,13 @@ profile directory. Persistent website logins therefore survive a complete
 browser restart as expected. Private windows continue to use an ephemeral
 network session and do not persist their cookies.
 
+## Developer tools
+
+WebKit DevTools are restored and explicitly enabled for every web view. `F12` and
+`Ctrl+Shift+I` open the inspector for the active tab, and the page context menu
+again exposes **Inspect Element**. DevTools are available in both normal and
+private windows.
+
 ## Tab strip
 
 The v0.1.5 changes cap the tab strip minimum and hide tabs that overflow the

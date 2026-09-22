@@ -112,7 +112,7 @@ no tabs, address bar, downloads button or settings menu:
 ./build/vant --app=https://nift.dev --fullscreen
 ```
 
-Press `F11` to enter or leave fullscreen. Application windows retain ordinary
+Press `F11` to enter or leave fullscreen. Press `F12` or `Ctrl+Shift+I` to open WebKit DevTools for the active tab; **Inspect Element** is also available from the page context menu. DevTools are available in normal and private windows. Application windows retain ordinary
 page actions such as reload, find and print through their keyboard shortcuts,
 while navigation remains inside the launched site window.
 
