@@ -785,20 +785,40 @@ std::string internal_page(WindowState *state, std::string_view uri) {
                 "<a title='Remove from history' href='vantage:download-delete?id=" + std::to_string(entry.id) + "'><svg viewBox='0 0 24 24'><path d='M5 7h14M9 7V4h6v3M8 7l1 13h6l1-13'/></svg></a></div></div>";
         }
         if (content.empty()) content = "<p class=empty>No downloads yet.</p>";
-    } else if (uri == "vantage:settings") {
+    } else if (uri.starts_with("vantage:settings")) {
         title = "Settings";
         const bool compatibility = vantage::compatibility_video_rendering();
         const auto dark_sites_enabled = vantage::dark_mode_enabled_domains();
+        constexpr std::size_t dark_sites_per_page = 30;
+        std::size_t dark_site_page = 1;
+        try {
+            const auto requested_page = query_value(uri, "page");
+            if (!requested_page.empty()) dark_site_page = std::max<std::size_t>(1, std::stoull(requested_page));
+        } catch (const std::exception &) {}
+        const std::size_t dark_site_pages = std::max<std::size_t>(1, (dark_sites_enabled.size() + dark_sites_per_page - 1) / dark_sites_per_page);
+        dark_site_page = std::min(dark_site_page, dark_site_pages);
+        const std::size_t dark_site_begin = (dark_site_page - 1) * dark_sites_per_page;
+        const std::size_t dark_site_end = std::min(dark_site_begin + dark_sites_per_page, dark_sites_enabled.size());
         std::string dark_sites;
-        for (const auto &domain : dark_sites_enabled)
+        for (std::size_t i = dark_site_begin; i < dark_site_end; ++i) {
+            const auto &domain = dark_sites_enabled[i];
             dark_sites += "<div class='item dark-site' data-dark-domain='" + html_escape(domain) + "'><div class=details><strong>" + html_escape(domain) + "</strong><span>Dark Mode is enabled for this domain.</span></div><a class=setting href='vantage:dark-mode-domain?domain=" + html_escape(domain) + "&enabled=0'>Disable</a></div>";
+        }
         if (dark_sites.empty()) dark_sites = "<p class=empty>No websites have Dark Mode enabled. Press Ctrl+Shift+D on a website to enable it.</p>";
         const auto dark_site_count = std::to_string(dark_sites_enabled.size());
         const std::string dark_site_tools = dark_sites_enabled.empty() ? "" :
-            "<div class=dark-site-tools>" + std::string(dark_sites_enabled.size() > 6 ? "<input class='search dark-site-search' type=search placeholder='Filter enabled websites' oninput='filterDarkSites(this.value)'>" : "") +
+            "<div class=dark-site-tools>" + std::string(dark_sites_enabled.size() > 6 ? "<input class='search dark-site-search' type=search placeholder='Filter this page' oninput='filterDarkSites(this.value)'>" : "") +
             "<a class=setting href='vantage:dark-mode-disable-all'>Disable all</a></div>";
+        std::string dark_site_pager;
+        if (dark_site_pages > 1) {
+            dark_site_pager = "<nav class=dark-site-pager aria-label='Enabled websites pages'>";
+            if (dark_site_page > 1) dark_site_pager += "<a class=setting href='vantage:settings?page=" + std::to_string(dark_site_page - 1) + "'>Previous</a>";
+            dark_site_pager += "<span>Page " + std::to_string(dark_site_page) + " of " + std::to_string(dark_site_pages) + "</span>";
+            if (dark_site_page < dark_site_pages) dark_site_pager += "<a class=setting href='vantage:settings?page=" + std::to_string(dark_site_page + 1) + "'>Next</a>";
+            dark_site_pager += "</nav>";
+        }
         content = std::string("<div class=item><div class=details><strong>Dark Mode</strong><span>Off by default · Press Ctrl+Shift+D to toggle Dark Reader for the current website. Your choice is remembered per domain.</span></div></div>")
-            + "<div class=section-heading><h2>Enabled websites (" + dark_site_count + ")</h2>" + dark_site_tools + "</div><div class=dark-sites>" + dark_sites + "</div>"
+            + "<div class=section-heading><h2>Enabled websites (" + dark_site_count + ")</h2>" + dark_site_tools + "</div><div class=dark-sites>" + dark_sites + "</div>" + dark_site_pager
             + "<div class=item><div class=details><strong>Compatibility video rendering</strong><span>"
             + std::string(compatibility
                 ? "Enabled · Uses the broadly compatible rendering path so video works reliably."
@@ -824,7 +844,7 @@ std::string internal_page(WindowState *state, std::string_view uri) {
         ".item span,.empty{color:#aaa59c}.actions{display:flex;gap:4px}.actions a{display:grid;place-items:center;width:34px;height:34px;background:transparent;color:#c9c4ba;text-decoration:none}.actions svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.actions a:hover{color:#ff8a62}.bulk,.form button,.setting{border:0;border-radius:7px;background:#3b3936;color:#eee9df;padding:8px 11px;cursor:pointer;text-decoration:none;white-space:nowrap}.bulk:hover,.form button:hover,.setting:hover{background:#4b4844;color:#ff9a76}.fileicon{display:grid;place-items:center;width:42px;height:46px;border-radius:6px;background:#3f9e91;color:#fff!important;font:bold 10px ui-monospace,monospace;text-transform:uppercase}"
         ".add{margin-bottom:16px}.add summary,.edit summary{cursor:pointer;color:#ccc7bd}.form{display:flex;gap:8px;margin-top:10px}.form input{flex:1;border-radius:8px}.edit{max-width:60px}.edit[open]{max-width:100%;flex:1}"
         ".rowmenu{position:relative}.rowmenu summary{list-style:none;cursor:pointer;font-size:22px;padding:4px 8px}.rowmenu summary::-webkit-details-marker{display:none}.rowmenu>div{position:absolute;z-index:2;right:0;top:32px;width:170px;padding:6px;background:#343331;border:1px solid #4d4a45;border-radius:8px;box-shadow:0 8px 24px #0008}.rowmenu button,.rowmenu a{display:block;width:100%;padding:9px;border:0;background:transparent;color:#eee9df;text-align:left;text-decoration:none}.rowmenu button:hover,.rowmenu a:hover{color:#ff8a62}"
-        ".history-day{margin:0 0 16px;border:1px solid #403e3a;border-radius:11px;background:#292827;overflow:visible}.history-day h2{margin:0;padding:14px 16px 9px;font-size:14px}.history-list{padding:0 8px 8px}.history-item{gap:10px;margin:0;padding:7px 8px;border:0;border-radius:7px;background:transparent}.history-item:hover{border:0;background:#353432}.history-item time{width:76px;flex:none;color:#aaa59c;font-size:12px}.history-item .favicon,.history-item .fallback{width:17px;height:17px}.history-details{flex-direction:row;align-items:baseline;gap:8px}.history-details strong{font-size:13px}.history-details span{font-size:12px}.history-item .rowmenu summary{font-size:19px;padding:1px 6px}.section-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:24px 4px 12px}.section-heading h2{font-size:15px;margin:0}.dark-site-tools{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex:1}.dark-site-search{width:min(320px,100%);height:36px}.dark-sites{max-height:420px;overflow-y:auto;overscroll-behavior:contain;padding-right:4px;scrollbar-gutter:stable}.dark-sites .item:last-child{margin-bottom:0}@media(max-width:700px){.section-heading{align-items:flex-start;flex-direction:column}.dark-site-tools{width:100%;justify-content:space-between}.dark-site-search{flex:1}}"
+        ".history-day{margin:0 0 16px;border:1px solid #403e3a;border-radius:11px;background:#292827;overflow:visible}.history-day h2{margin:0;padding:14px 16px 9px;font-size:14px}.history-list{padding:0 8px 8px}.history-item{gap:10px;margin:0;padding:7px 8px;border:0;border-radius:7px;background:transparent}.history-item:hover{border:0;background:#353432}.history-item time{width:76px;flex:none;color:#aaa59c;font-size:12px}.history-item .favicon,.history-item .fallback{width:17px;height:17px}.history-details{flex-direction:row;align-items:baseline;gap:8px}.history-details strong{font-size:13px}.history-details span{font-size:12px}.history-item .rowmenu summary{font-size:19px;padding:1px 6px}.section-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:24px 4px 12px}.section-heading h2{font-size:15px;margin:0}.dark-site-tools{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex:1}.dark-site-search{width:min(320px,100%);height:36px}.dark-sites{max-height:420px;overflow-y:auto;overscroll-behavior:contain;padding-right:4px;margin-bottom:14px;scrollbar-gutter:stable}.dark-sites .item:last-child{margin-bottom:0}.dark-site-pager{display:flex;align-items:center;justify-content:center;gap:12px;margin:-2px 0 18px;color:#aaa59c}.dark-site-pager span{min-width:92px;text-align:center}@media(max-width:700px){.section-heading{align-items:flex-start;flex-direction:column}.dark-site-tools{width:100%;justify-content:space-between}.dark-site-search{flex:1}}"
         "</style></head><body><main><div class=top><h1>" + title + "</h1><input class=search type=search placeholder='Search " + title +
         "' id=pageSearch oninput=filterRows(this.value)>" + bulk + "</div>" + content +
         "</main><script>function filterRows(q){q=q.toLowerCase();document.querySelectorAll('[data-search]').forEach(e=>e.hidden=!e.dataset.search.toLowerCase().includes(q))}"
@@ -958,7 +978,7 @@ void load_decision(TabState *tab, const vantage::NavigationDecision &decision) {
         const char *icon = decision.uri == "vantage:history" ? "document-open-recent-symbolic" :
             decision.uri == "vantage:downloads" ? "folder-download-symbolic" :
             decision.uri == "vantage:bookmarks" ? "starred-symbolic" :
-            decision.uri == "vantage:settings" ? "preferences-system-symbolic" :
+            decision.uri.starts_with("vantage:settings") ? "preferences-system-symbolic" :
             decision.uri == "vantage:about" ? "help-about-symbolic" : "web-browser-symbolic";
         if (decision.uri == "vantage:new") set_vantage_image(tab->favicon, true);
         else gtk_image_set_from_icon_name(GTK_IMAGE(tab->favicon), icon);
@@ -2318,6 +2338,16 @@ void history_suggestion_clicked(GtkButton *button, WindowState *state) {
     submit_address(nullptr, state);
 }
 
+gboolean select_address_deferred(void *data) {
+    auto *state = static_cast<WindowState *>(data);
+    if (!state->closed) gtk_editable_select_region(GTK_EDITABLE(state->address), 0, -1);
+    return G_SOURCE_REMOVE;
+}
+
+void address_pressed(GtkGestureClick *, int, double, double, WindowState *state) {
+    if (!gtk_widget_has_focus(state->address)) g_idle_add(select_address_deferred, state);
+}
+
 gboolean address_key_pressed(GtkEventControllerKey *, guint key, guint, GdkModifierType modifiers,
                              WindowState *state) {
     if (key == GDK_KEY_Return || key == GDK_KEY_KP_Enter) {
@@ -3560,6 +3590,10 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     g_signal_connect(state->reload_stop, "clicked", G_CALLBACK(reload_or_stop), state);
     g_signal_connect(state->address, "activate", G_CALLBACK(submit_address), state);
     g_signal_connect(state->address, "changed", G_CALLBACK(address_changed), state);
+    auto *address_click = gtk_gesture_click_new();
+    gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(address_click), GDK_BUTTON_PRIMARY);
+    g_signal_connect(address_click, "pressed", G_CALLBACK(address_pressed), state);
+    gtk_widget_add_controller(state->address, GTK_EVENT_CONTROLLER(address_click));
     auto *dismiss_click = gtk_gesture_click_new();
     gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(dismiss_click), GTK_PHASE_BUBBLE);
     g_signal_connect(dismiss_click, "pressed", G_CALLBACK(dismiss_suggestions_on_click), state);
