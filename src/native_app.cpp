@@ -2339,9 +2339,15 @@ void history_suggestion_clicked(GtkButton *button, WindowState *state) {
     submit_address(nullptr, state);
 }
 
-gboolean select_address_deferred(void *data) {
-    auto *state = static_cast<WindowState *>(data);
-    if (!state->closed) gtk_editable_select_region(GTK_EDITABLE(state->address), 0, -1);
+void focus_and_select_address(WindowState *state) {
+    if (state->closed) return;
+    state->address_submission_dismissed = false;
+    gtk_widget_grab_focus(state->address);
+    gtk_editable_select_region(GTK_EDITABLE(state->address), 0, -1);
+}
+
+gboolean select_address_after_click(void *data) {
+    focus_and_select_address(static_cast<WindowState *>(data));
     return G_SOURCE_REMOVE;
 }
 
@@ -2349,11 +2355,20 @@ void address_focus_changed(GObject *address, GParamSpec *, WindowState *state) {
     if (gtk_widget_has_focus(GTK_WIDGET(address))) state->address_focused_at = g_get_monotonic_time();
 }
 
-void address_released(GtkGestureClick *, int, double, double, WindowState *state) {
-    // Diagnostic: select the entire address after every primary click.
-    // This deliberately ignores focus timing so we can verify that the
-    // post-click selection mechanism itself survives GTK's click handling.
-    g_idle_add(select_address_deferred, state);
+gboolean address_legacy_event(GtkEventControllerLegacy *, GdkEvent *event, WindowState *state) {
+    if (gdk_event_get_event_type(event) != GDK_BUTTON_RELEASE ||
+        gdk_button_event_get_button(event) != GDK_BUTTON_PRIMARY)
+        return FALSE;
+
+    // GTK's GtkEntry owns its own click gesture, so a sibling GtkGestureClick can
+    // be denied before its release callback runs. Observe the raw event in the
+    // capture phase instead. If this click is the one that just focused the
+    // address bar, run the exact same focus+selection path as Ctrl+L after GTK
+    // has finished placing the caret for the click.
+    const auto focused_at = state->address_focused_at;
+    if (focused_at > 0 && g_get_monotonic_time() - focused_at <= 200000)
+        g_timeout_add(1, select_address_after_click, state);
+    return FALSE;
 }
 
 gboolean address_key_pressed(GtkEventControllerKey *, guint key, guint, GdkModifierType modifiers,
@@ -3161,9 +3176,7 @@ gboolean key_pressed(GtkEventControllerKey *, guint keyval, guint,
         return TRUE;
     }
     if (control && (keyval == GDK_KEY_l || keyval == GDK_KEY_L)) {
-        state->address_submission_dismissed = false;
-        gtk_widget_grab_focus(state->address);
-        gtk_editable_select_region(GTK_EDITABLE(state->address), 0, -1);
+        focus_and_select_address(state);
         return TRUE;
     }
     if (control && (keyval == GDK_KEY_f || keyval == GDK_KEY_F)) {
@@ -3599,10 +3612,10 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     g_signal_connect(state->address, "activate", G_CALLBACK(submit_address), state);
     g_signal_connect(state->address, "changed", G_CALLBACK(address_changed), state);
     g_signal_connect(state->address, "notify::has-focus", G_CALLBACK(address_focus_changed), state);
-    auto *address_click = gtk_gesture_click_new();
-    gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(address_click), GDK_BUTTON_PRIMARY);
-    g_signal_connect(address_click, "released", G_CALLBACK(address_released), state);
-    gtk_widget_add_controller(state->address, GTK_EVENT_CONTROLLER(address_click));
+    auto *address_events = gtk_event_controller_legacy_new();
+    gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(address_events), GTK_PHASE_CAPTURE);
+    g_signal_connect(address_events, "event", G_CALLBACK(address_legacy_event), state);
+    gtk_widget_add_controller(state->address, address_events);
     auto *dismiss_click = gtk_gesture_click_new();
     gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(dismiss_click), GTK_PHASE_BUBBLE);
     g_signal_connect(dismiss_click, "pressed", G_CALLBACK(dismiss_suggestions_on_click), state);
