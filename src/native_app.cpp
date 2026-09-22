@@ -213,6 +213,7 @@ std::string format_bytes(std::uint64_t bytes);
 void cancel_download(ApplicationState *owner, std::int64_t id);
 void address_changed(GtkEditable *, WindowState *state);
 void hide_address_suggestions(WindowState *state);
+void focus_and_select_address(WindowState *state);
 std::string html_escape(std::string_view value);
 void print_page(GtkButton *, WindowState *state);
 
