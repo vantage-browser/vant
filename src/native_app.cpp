@@ -793,7 +793,7 @@ std::string internal_page(WindowState *state, std::string_view uri) {
         for (const auto &domain : dark_sites_enabled)
             dark_sites += "<div class=item><div class=details><strong>" + html_escape(domain) + "</strong><span>Dark Mode is enabled for this domain.</span></div><a class=setting href='vantage:dark-mode-domain?domain=" + html_escape(domain) + "&enabled=0'>Disable</a></div>";
         if (dark_sites.empty()) dark_sites = "<p class=empty>No websites have Dark Mode enabled. Press Ctrl+Shift+D on a website to enable it.</p>";
-        content = "<div class=item><div class=details><strong>Dark Mode</strong><span>Off by default · Press Ctrl+Shift+D to toggle Dark Reader for the current website. Your choice is remembered per domain.</span></div></div>"
+        content = std::string("<div class=item><div class=details><strong>Dark Mode</strong><span>Off by default · Press Ctrl+Shift+D to toggle Dark Reader for the current website. Your choice is remembered per domain.</span></div></div>")
             + "<h2 style='font-size:15px;margin:24px 4px 12px'>Enabled websites</h2>" + dark_sites
             + "<div class=item><div class=details><strong>Compatibility video rendering</strong><span>"
             + std::string(compatibility
