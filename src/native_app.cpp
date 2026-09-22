@@ -4235,8 +4235,13 @@ std::string native_versions() {
 
 int run_native(const NativeLaunchOptions &options) {
     auto application = std::unique_ptr<GtkApplication, decltype(&g_object_unref)>(
-        gtk_application_new("cv.vantage_browser.Vantage",
-            options.smoke || options.tab_probe ? G_APPLICATION_NON_UNIQUE : G_APPLICATION_DEFAULT_FLAGS),
+        // Treat every desktop/CLI launch as a request for a new browser window in
+        // the workspace where it was launched.  A unique GtkApplication lets the
+        // shell satisfy activation by merely presenting an existing window, which
+        // is why clicking Vantage from another workspace jumped to the old one.
+        // Chromium-style launch semantics are a better fit for a browser: each
+        // `vant` invocation creates a window; shared profile data remains on disk.
+        gtk_application_new("cv.vantage_browser.Vantage", G_APPLICATION_NON_UNIQUE),
         &g_object_unref);
     ApplicationState state;
     state.application = application.get();
@@ -4271,9 +4276,14 @@ int run_native(const NativeLaunchOptions &options) {
         std::filesystem::path(g_get_user_data_dir()) / "vantage-browser" / "browser.sqlite3",
         options.smoke || options.tab_probe);
     state.data->reconcile_downloads();
-    state.agent_rpc = std::make_unique<AgentRpcServer>([&state](AgentRequest request, AgentReply reply) { handle_agent_request(&state, std::move(request), std::move(reply)); });
-    std::string agent_error_message;
-    if (!state.agent_rpc->start(&agent_error_message)) std::cerr << "vant: agent RPC unavailable: " << agent_error_message << '\n';
+    // App-mode windows do not expose the browser agent.  Normal windows race safely
+    // for the well-known socket: AgentRpcServer::start() refuses to replace a live
+    // owner, so launching another Vantage window cannot steal agent control.
+    if (!options.app_mode) {
+        state.agent_rpc = std::make_unique<AgentRpcServer>([&state](AgentRequest request, AgentReply reply) { handle_agent_request(&state, std::move(request), std::move(reply)); });
+        std::string agent_error_message;
+        if (!state.agent_rpc->start(&agent_error_message)) std::cerr << "vant: agent RPC unavailable: " << agent_error_message << '\n';
+    }
     g_signal_connect(application.get(), "activate", G_CALLBACK(activate), &state);
     return g_application_run(G_APPLICATION(application.get()), 0, nullptr);
 }

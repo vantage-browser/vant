@@ -157,7 +157,29 @@ AgentRpcServer::~AgentRpcServer(){stop();}
 const std::string &AgentRpcServer::path()const noexcept{return impl_->path;}
 bool AgentRpcServer::start(std::string *error){
     if(impl_->running)return true;
-    ::unlink(impl_->path.c_str()); impl_->fd=::socket(AF_UNIX,SOCK_STREAM,0); if(impl_->fd<0){if(error)*error=std::strerror(errno);return false;}
+    // Never unlink a live server owned by another Vantage window.  Multiple normal
+    // browser processes are intentional (one launch -> one window); only the first
+    // one owns the stable agent socket.  If connect succeeds, leave it untouched.
+    // If it fails, the pathname is stale and is safe to remove before binding.
+    if (std::filesystem::exists(impl_->path)) {
+        int probe = ::socket(AF_UNIX, SOCK_STREAM, 0);
+        bool live = false;
+        if (probe >= 0) {
+            sockaddr_un existing{};
+            existing.sun_family = AF_UNIX;
+            if (impl_->path.size() < sizeof existing.sun_path) {
+                std::strcpy(existing.sun_path, impl_->path.c_str());
+                live = ::connect(probe, reinterpret_cast<sockaddr *>(&existing), sizeof existing) == 0;
+            }
+            ::close(probe);
+        }
+        if (live) {
+            if (error) *error = "already owned by another Vantage window";
+            return false;
+        }
+        ::unlink(impl_->path.c_str());
+    }
+    impl_->fd=::socket(AF_UNIX,SOCK_STREAM,0); if(impl_->fd<0){if(error)*error=std::strerror(errno);return false;}
     if(!set_cloexec(impl_->fd)){if(error)*error="failed to set close-on-exec on agent socket";::close(impl_->fd);impl_->fd=-1;return false;}
     sockaddr_un a{};a.sun_family=AF_UNIX;if(impl_->path.size()>=sizeof a.sun_path){if(error)*error="socket path too long";::close(impl_->fd);impl_->fd=-1;return false;}std::strcpy(a.sun_path,impl_->path.c_str());
     if(::bind(impl_->fd,reinterpret_cast<sockaddr*>(&a),sizeof a)!=0||::chmod(impl_->path.c_str(),0600)!=0||::listen(impl_->fd,32)!=0){if(error)*error=std::strerror(errno);::close(impl_->fd);impl_->fd=-1;::unlink(impl_->path.c_str());return false;}

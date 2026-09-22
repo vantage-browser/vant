@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Version=1.0
+Version=1.5
 Name=Vantage Browser
 GenericName=Web Browser
 Comment=Browse the web with Vantage
@@ -12,12 +12,13 @@ StartupWMClass=cv.vantage_browser.Vantage
 Categories=Network;WebBrowser;
 MimeType=x-scheme-handler/http;x-scheme-handler/https;text/html;
 Keywords=web;browser;internet;
-Actions=NewWindow;NewPrivateWindow;
+SingleMainWindow=false
+Actions=new-window;new-private-window;
 
-[Desktop Action NewWindow]
+[Desktop Action new-window]
 Name=New Window
 Exec=vant
 
-[Desktop Action NewPrivateWindow]
+[Desktop Action new-private-window]
 Name=New Private Window
 Exec=vant --private

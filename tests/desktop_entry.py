@@ -15,6 +15,7 @@ assert main["Type"] == "Application"
 assert main["Exec"] == "vant %U"
 assert main["Icon"] == icon_path.stem
 assert icon_path.is_file()
-assert main["Actions"] == "NewWindow;NewPrivateWindow;"
-assert parser["Desktop Action NewWindow"]["Exec"] == "vant"
-assert parser["Desktop Action NewPrivateWindow"]["Exec"] == "vant --private"
+assert main["SingleMainWindow"] == "false"
+assert main["Actions"] == "new-window;new-private-window;"
+assert parser["Desktop Action new-window"]["Exec"] == "vant"
+assert parser["Desktop Action new-private-window"]["Exec"] == "vant --private"

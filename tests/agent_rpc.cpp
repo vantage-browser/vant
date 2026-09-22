@@ -47,6 +47,10 @@ int main(){
   auto runtime=std::filesystem::temp_directory_path()/"vantage-agent-rpc-test"; std::filesystem::create_directories(runtime);
   setenv("XDG_RUNTIME_DIR",runtime.c_str(),1);
   std::string socket; { vantage::AgentRpcServer server([](vantage::AgentRequest r,vantage::AgentReply reply){reply(vantage::agent_ok(r.id,"true"));}); std::string error; assert(server.start(&error)); socket=server.path(); assert(std::filesystem::exists(socket));
-    assert(agent_socket_is_cloexec(socket) && "agent listening socket must not be inherited by web/child processes"); }
+    assert(agent_socket_is_cloexec(socket) && "agent listening socket must not be inherited by web/child processes");
+    // A second browser window must not unlink/steal the first window's agent socket.
+    vantage::AgentRpcServer second([](vantage::AgentRequest r,vantage::AgentReply reply){reply(vantage::agent_ok(r.id,"true"));});
+    std::string second_error; assert(!second.start(&second_error)); assert(std::filesystem::exists(socket));
+  }
   assert(!std::filesystem::exists(socket)); std::filesystem::remove_all(runtime);
 }
