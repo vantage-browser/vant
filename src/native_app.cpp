@@ -3566,6 +3566,18 @@ gboolean key_pressed(GtkEventControllerKey *, guint keyval, guint,
         if (index < state->tabs.size()) select_tab(state->tabs[index].get());
         return TRUE;
     }
+    // Route paste explicitly through WebKit when page content owns focus.
+    // This matters for rich clipboard payloads (notably image/png screenshots)
+    // which websites consume through their normal paste event. Text paste keeps
+    // using the same WebKit editing command and non-page widgets are untouched.
+    if (control && !shift && (keyval == GDK_KEY_v || keyval == GDK_KEY_V) && state->view) {
+        GtkWidget *focus = gtk_window_get_focus(GTK_WINDOW(state->window));
+        GtkWidget *web_view = GTK_WIDGET(state->view);
+        if (focus == web_view || (focus && gtk_widget_is_ancestor(focus, web_view))) {
+            webkit_web_view_execute_editing_command(state->view, WEBKIT_EDITING_COMMAND_PASTE);
+            return TRUE;
+        }
+    }
     if (control && (keyval == GDK_KEY_l || keyval == GDK_KEY_L)) {
         focus_and_select_address(state);
         return TRUE;

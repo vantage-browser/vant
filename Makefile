@@ -18,7 +18,7 @@ JSPP_DIR := third_party/jspp
 JSPP_SOURCES := $(filter-out $(JSPP_DIR)/src/main.cpp,$(wildcard $(JSPP_DIR)/src/*.cpp))
 JSPP_OBJECTS := $(JSPP_SOURCES:$(JSPP_DIR)/src/%.cpp=$(BUILD)/jspp/%.o)
 
-.PHONY: all deps darkreader test test-unit test-sanitize smoke smoke-native test-tab-sizing benchmark evidence vendor-check vendor-integrity clean
+.PHONY: all deps darkreader test test-unit test-sanitize smoke smoke-native test-tab-sizing benchmark evidence vendor-check vendor-integrity media-diagnostics clean
 all: deps darkreader $(BUILD)/vant
 
 darkreader: $(DARKREADER_JS)
@@ -184,6 +184,10 @@ benchmark-agent: $(BUILD)/benchmark_agent_rpc
 
 benchmark: $(BUILD)/benchmark_model
 	./$(BUILD)/benchmark_model
+
+media-diagnostics:
+	./tools/media_diagnostics.sh
+
 
 clean:
 	rm -rf $(BUILD)

@@ -51,8 +51,17 @@ Start here: [docs/AGENT-GUIDE.md](docs/AGENT-GUIDE.md). Full reference:
 ```sh
 sudo apt update
 sudo apt install build-essential pkg-config python3 \
-  libgtk-4-dev libwebkitgtk-6.0-dev libsqlite3-dev
+  libgtk-4-dev libwebkitgtk-6.0-dev libsqlite3-dev \
+  gstreamer1.0-tools gstreamer1.0-pipewire gstreamer1.0-libcamera \
+  gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+  gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav
 ```
+
+The GStreamer/PipeWire/libcamera packages are runtime media support, not C++
+build dependencies. They are included here because WebKitGTK delegates camera,
+microphone and general web media capture/playback to the system media stack.
+If camera capture reports zero devices, run `make media-diagnostics` before
+changing Vantage's permission code.
 
 Vantage currently targets WebKitGTK 6.0. Older Ubuntu releases that do not
 provide `libwebkitgtk-6.0-dev` are not supported by this development baseline.
