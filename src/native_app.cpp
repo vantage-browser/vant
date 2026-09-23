@@ -217,6 +217,7 @@ void hide_address_suggestions(WindowState *state);
 void focus_and_select_address(WindowState *state);
 std::string html_escape(std::string_view value);
 void print_page(GtkButton *, WindowState *state);
+void load_decision(TabState *tab, const vantage::NavigationDecision &decision);
 
 void update_find_count(WindowState *state) {
     const auto label = state->find_total ? std::to_string(state->find_current) + " / " +
@@ -998,12 +999,33 @@ void load_decision(TabState *tab, const vantage::NavigationDecision &decision) {
     }
 }
 
+std::string local_path_uri(std::string_view input) {
+    std::string path(input);
+    if (path.starts_with("~/")) {
+        const char *home = g_get_home_dir();
+        if (home) path = std::string(home) + path.substr(1);
+    }
+    if (!g_path_is_absolute(path.c_str()) || !g_file_test(path.c_str(), G_FILE_TEST_EXISTS)) return {};
+    GError *error = nullptr;
+    char *uri = g_filename_to_uri(path.c_str(), nullptr, &error);
+    std::string result = uri ? uri : "";
+    g_free(uri);
+    if (error) g_error_free(error);
+    return result;
+}
+
+std::string navigable_address(std::string_view input) {
+    if (const auto uri = local_path_uri(input); !uri.empty()) return uri;
+    return std::string(input);
+}
+
 void submit_address(GtkEntry *, WindowState *state) {
     state->address_submission_dismissed = true;
     hide_address_suggestions(state);
     const char *text = gtk_editable_get_text(GTK_EDITABLE(state->address));
     if (auto *tab = find_tab(state, state->view)) {
-        load_decision(tab, state->policy.resolve(text ? text : ""));
+        const auto target = navigable_address(text ? text : "");
+        load_decision(tab, state->policy.resolve(target));
         gtk_widget_grab_focus(GTK_WIDGET(tab->view));
     }
 }
@@ -2835,6 +2857,56 @@ gboolean on_script_dialog(WebKitWebView *, WebKitScriptDialog *dialog) {
 }
 
 
+std::string first_file_uri(const GValue *value, std::string *path_out = nullptr) {
+    if (!value || G_VALUE_TYPE(value) != GDK_TYPE_FILE_LIST) return {};
+    auto *file_list = static_cast<GdkFileList *>(g_value_get_boxed(value));
+    if (!file_list) return {};
+    GSList *files = gdk_file_list_get_files(file_list);
+    if (!files) return {};
+    auto *file = G_FILE(files->data);
+    char *uri = g_file_get_uri(file);
+    char *path = g_file_get_path(file);
+    std::string result = uri ? uri : "";
+    if (path_out) *path_out = path ? path : "";
+    g_free(uri);
+    g_free(path);
+    g_slist_free(files);
+    return result;
+}
+
+bool is_web_page_path(std::string_view path) {
+    const auto dot = path.find_last_of('.');
+    if (dot == std::string_view::npos) return false;
+    std::string extension(path.substr(dot));
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return extension == ".html" || extension == ".htm" || extension == ".xhtml" ||
+        extension == ".svg" || extension == ".mhtml" || extension == ".mht";
+}
+
+gboolean address_file_dropped(GtkDropTarget *, const GValue *value, double, double, WindowState *state) {
+    const auto uri = first_file_uri(value);
+    if (uri.empty()) return FALSE;
+    gtk_editable_set_text(GTK_EDITABLE(state->address), uri.c_str());
+    state->address_submission_dismissed = true;
+    hide_address_suggestions(state);
+    gtk_widget_grab_focus(state->address);
+    gtk_editable_set_position(GTK_EDITABLE(state->address), -1);
+    return TRUE;
+}
+
+gboolean tab_strip_file_dropped(GtkDropTarget *, const GValue *value, double x, double y, WindowState *state) {
+    const auto uri = first_file_uri(value);
+    if (uri.empty()) return FALSE;
+    if (auto *tab = tab_at(state, state->tab_strip, x, y)) {
+        load_decision(tab, state->policy.resolve(uri));
+        select_tab(tab);
+    } else {
+        new_tab(state, uri);
+    }
+    return TRUE;
+}
+
 // WebKitGTK 2.52 currently negotiates desktop file drags as URI/text on some
 // GTK4/Wayland stacks (the same behaviour is reproducible in MiniBrowser).
 // Prefer GTK's native GdkFileList ourselves and mirror the native drag
@@ -2894,6 +2966,13 @@ void web_file_drag_leave(GtkDropTarget *, TabState *tab) {
 
 gboolean web_file_dropped(GtkDropTarget *, const GValue *value, double x, double y, TabState *tab) {
     if (!tab || !tab->view || G_VALUE_TYPE(value) != GDK_TYPE_FILE_LIST) return FALSE;
+    std::string dropped_path;
+    const auto dropped_uri = first_file_uri(value, &dropped_path);
+    if (!dropped_uri.empty() && is_web_page_path(dropped_path)) {
+        tab->web_file_drag_active = false;
+        load_decision(tab, tab->window->policy.resolve(dropped_uri));
+        return TRUE;
+    }
     auto *file_list = static_cast<GdkFileList *>(g_value_get_boxed(value));
     if (!file_list) return FALSE;
     GSList *files = gdk_file_list_get_files(file_list);
@@ -3582,6 +3661,9 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
         g_signal_connect(tab_drop, "leave", G_CALLBACK(tab_drag_left), state);
         g_signal_connect(tab_drop, "drop", G_CALLBACK(tab_dropped), state);
         gtk_widget_add_controller(tab_strip, GTK_EVENT_CONTROLLER(tab_drop));
+        auto *tab_file_drop = gtk_drop_target_new(GDK_TYPE_FILE_LIST, GDK_ACTION_COPY);
+        g_signal_connect(tab_file_drop, "drop", G_CALLBACK(tab_strip_file_dropped), state);
+        gtk_widget_add_controller(tab_strip, GTK_EVENT_CONTROLLER(tab_file_drop));
     }
     gtk_window_set_titlebar(GTK_WINDOW(state->window), header);
     if (state->app_mode) {
@@ -3773,6 +3855,9 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
     g_signal_connect(state->reload_stop, "clicked", G_CALLBACK(reload_or_stop), state);
     g_signal_connect(state->address, "activate", G_CALLBACK(submit_address), state);
     g_signal_connect(state->address, "changed", G_CALLBACK(address_changed), state);
+    auto *address_file_drop = gtk_drop_target_new(GDK_TYPE_FILE_LIST, GDK_ACTION_COPY);
+    g_signal_connect(address_file_drop, "drop", G_CALLBACK(address_file_dropped), state);
+    gtk_widget_add_controller(state->address, GTK_EVENT_CONTROLLER(address_file_drop));
     auto *browser_click = gtk_gesture_click_new();
     gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(browser_click), GDK_BUTTON_PRIMARY);
     gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(browser_click), GTK_PHASE_CAPTURE);

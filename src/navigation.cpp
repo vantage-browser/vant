@@ -56,7 +56,7 @@ NavigationDecision NavigationPolicy::resolve(std::string_view raw) const {
 
     if (colon != std::string::npos) {
         const auto scheme = lower(std::string_view(input).substr(0, colon));
-        if (scheme == "http" || scheme == "https")
+        if (scheme == "http" || scheme == "https" || scheme == "file")
             return {NavigationKind::web, input, {}};
         if (scheme == "about" || scheme == "vantage")
             return {NavigationKind::internal, input, {}};

@@ -14,7 +14,8 @@ int main() {
     assert(policy.resolve("vantage:new").kind == NavigationKind::internal);
     assert(policy.resolve("mailto:test@example.com").kind == NavigationKind::external);
     assert(policy.resolve("javascript:alert(1)").kind == NavigationKind::rejected);
-    assert(policy.resolve("file:///etc/passwd").kind == NavigationKind::rejected);
+    assert(policy.resolve("file:///tmp/vantage-local-page.html").kind == NavigationKind::web);
+    assert(policy.resolve("file:///tmp/vantage-local-page.html").uri == "file:///tmp/vantage-local-page.html");
     assert(policy.resolve("data:text/html,test").kind == NavigationKind::rejected);
     assert(policy.resolve("two words").uri == "https://search.brave.com/search?q=two+words");
     assert(policy.resolve("c++ browser").uri == "https://search.brave.com/search?q=c%2B%2B+browser");
