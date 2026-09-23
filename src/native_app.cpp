@@ -208,6 +208,8 @@ struct ApplicationState {
 struct MediaPermissionPrompt {
     WebKitPermissionRequest *request{};
     GtkWidget *dialog{};
+    GDBusConnection *portal_connection{};
+    guint portal_subscription{};
 };
 
 std::string permission_origin(WebKitWebView *view) {
@@ -229,18 +231,75 @@ std::string permission_origin(WebKitWebView *view) {
     return origin;
 }
 
+void cleanup_media_prompt(MediaPermissionPrompt *prompt) {
+    if (prompt->portal_subscription && prompt->portal_connection)
+        g_dbus_connection_signal_unsubscribe(prompt->portal_connection, prompt->portal_subscription);
+    prompt->portal_subscription = 0;
+    if (prompt->portal_connection) g_object_unref(prompt->portal_connection);
+    prompt->portal_connection = nullptr;
+}
+
 void finish_media_permission(MediaPermissionPrompt *prompt, bool allow) {
+    if (!prompt->request) return;
     if (allow) webkit_permission_request_allow(prompt->request);
     else webkit_permission_request_deny(prompt->request);
     g_object_unref(prompt->request);
     prompt->request = nullptr;
+    cleanup_media_prompt(prompt);
     g_signal_handlers_disconnect_by_data(prompt->dialog, prompt);
     gtk_window_destroy(GTK_WINDOW(prompt->dialog));
     delete prompt;
 }
 
+void camera_portal_response(GDBusConnection *, const gchar *, const gchar *, const gchar *,
+                            const gchar *, GVariant *parameters, gpointer data) {
+    auto *prompt = static_cast<MediaPermissionPrompt *>(data);
+    guint response = 2;
+    GVariant *results = nullptr;
+    g_variant_get(parameters, "(u@a{sv})", &response, &results);
+    if (results) g_variant_unref(results);
+    // 0 is the portal's success response. Anything else is denial/cancel.
+    finish_media_permission(prompt, response == 0);
+}
+
+
 void allow_media_permission(GtkButton *, MediaPermissionPrompt *prompt) {
-    finish_media_permission(prompt, true);
+    if (!WEBKIT_IS_USER_MEDIA_PERMISSION_REQUEST(prompt->request) ||
+        !webkit_user_media_permission_is_for_video_device(WEBKIT_USER_MEDIA_PERMISSION_REQUEST(prompt->request))) {
+        finish_media_permission(prompt, true);
+        return;
+    }
+
+    GError *error = nullptr;
+    prompt->portal_connection = g_bus_get_sync(G_BUS_TYPE_SESSION, nullptr, &error);
+    if (!prompt->portal_connection) {
+        if (error) g_error_free(error);
+        finish_media_permission(prompt, true);
+        return;
+    }
+    const auto token = std::string("vantage_camera_") + std::to_string(g_get_monotonic_time());
+    GVariantBuilder options;
+    g_variant_builder_init(&options, G_VARIANT_TYPE_VARDICT);
+    g_variant_builder_add(&options, "{sv}", "handle_token", g_variant_new_string(token.c_str()));
+    GVariant *reply = g_dbus_connection_call_sync(prompt->portal_connection,
+        "org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop",
+        "org.freedesktop.portal.Camera", "AccessCamera", g_variant_new("(a{sv})", &options),
+        G_VARIANT_TYPE("(o)"), G_DBUS_CALL_FLAGS_NONE, 3000, nullptr, &error);
+    if (!reply) {
+        if (error) {
+            std::cerr << "vant: camera portal unavailable: " << error->message << '\n';
+            g_error_free(error);
+        }
+        finish_media_permission(prompt, true);
+        return;
+    }
+    const gchar *handle = nullptr;
+    g_variant_get(reply, "(&o)", &handle);
+    prompt->portal_subscription = g_dbus_connection_signal_subscribe(
+        prompt->portal_connection, "org.freedesktop.portal.Desktop",
+        "org.freedesktop.portal.Request", "Response", handle, nullptr,
+        G_DBUS_SIGNAL_FLAGS_NONE, camera_portal_response, prompt, nullptr);
+    g_variant_unref(reply);
 }
 
 void deny_media_permission(GtkButton *, MediaPermissionPrompt *prompt) {
@@ -248,8 +307,15 @@ void deny_media_permission(GtkButton *, MediaPermissionPrompt *prompt) {
 }
 
 gboolean permission_requested(WebKitWebView *view, WebKitPermissionRequest *request, TabState *tab) {
-    // Only intercept getUserMedia here. Other WebKit permission request types
-    // deliberately continue through their existing/default paths.
+    // Device enumeration is a separate WebKit permission request. Allowing it
+    // lets sites discover available capture devices; actual camera/microphone
+    // use still goes through the explicit getUserMedia prompt below.
+    if (WEBKIT_IS_DEVICE_INFO_PERMISSION_REQUEST(request)) {
+        webkit_permission_request_allow(request);
+        return TRUE;
+    }
+    // Other WebKit permission request types deliberately continue through
+    // their existing/default paths.
     if (!WEBKIT_IS_USER_MEDIA_PERMISSION_REQUEST(request)) return FALSE;
 
     auto *media = WEBKIT_USER_MEDIA_PERMISSION_REQUEST(request);
@@ -305,6 +371,7 @@ gboolean permission_requested(WebKitWebView *view, WebKitPermissionRequest *requ
             g_object_unref(p->request);
             p->request = nullptr;
         }
+        cleanup_media_prompt(p);
         delete p;
         return FALSE;
     }), prompt);
@@ -3503,6 +3570,59 @@ gboolean tab_sizing_probe(void *data) {
     return G_SOURCE_REMOVE;
 }
 
+struct RichPasteRequest {
+    WebKitWebView *view{};
+    ~RichPasteRequest() { if (view) g_object_unref(view); }
+};
+
+void rich_paste_texture_ready(GObject *source, GAsyncResult *result, gpointer data) {
+    std::unique_ptr<RichPasteRequest> request(static_cast<RichPasteRequest *>(data));
+    GError *error = nullptr;
+    GdkTexture *texture = gdk_clipboard_read_texture_finish(GDK_CLIPBOARD(source), result, &error);
+    if (!texture) {
+        if (error) g_error_free(error);
+        return;
+    }
+    GBytes *png = gdk_texture_save_to_png_bytes(texture);
+    g_object_unref(texture);
+    if (!png) return;
+    gsize size = 0;
+    const auto *bytes = static_cast<const guchar *>(g_bytes_get_data(png, &size));
+    gchar *encoded = g_base64_encode(bytes, size);
+    g_bytes_unref(png);
+    if (!encoded) return;
+
+    // WebKitGTK releases before the upstream raw-image clipboard fix can
+    // expose screenshot image/png data to GTK but leave ClipboardEvent.files
+    // empty. Recreate only that missing image File; text/HTML paste remains
+    // entirely native WebKit behavior.
+    const std::string script = std::string(R"JS((()=>{
+const b=atob(")JS") + encoded + R"JS(");
+const a=new Uint8Array(b.length);for(let i=0;i<b.length;i++)a[i]=b.charCodeAt(i);
+const f=new File([a],"image.png",{type:"image/png",lastModified:Date.now()});
+const d=new DataTransfer();d.items.add(f);
+const e=new ClipboardEvent("paste",{clipboardData:d,bubbles:true,cancelable:true});
+(document.activeElement||document).dispatchEvent(e);
+})())JS";
+    g_free(encoded);
+    webkit_web_view_evaluate_javascript(request->view, script.c_str(), script.size(), nullptr,
+        "vantage://rich-paste", nullptr, nullptr, nullptr);
+}
+
+bool try_rich_image_paste(WindowState *state) {
+    if (!state->view) return false;
+    GtkWidget *focus = gtk_window_get_focus(GTK_WINDOW(state->window));
+    GtkWidget *web_view = GTK_WIDGET(state->view);
+    if (!(focus == web_view || (focus && gtk_widget_is_ancestor(focus, web_view)))) return false;
+    GdkClipboard *clipboard = gtk_widget_get_clipboard(state->window);
+    GdkContentFormats *formats = gdk_clipboard_get_formats(clipboard);
+    if (!gdk_content_formats_contain_mime_type(formats, "image/png") &&
+        !gdk_content_formats_contain_gtype(formats, GDK_TYPE_TEXTURE)) return false;
+    gdk_clipboard_read_texture_async(clipboard, nullptr, rich_paste_texture_ready,
+        new RichPasteRequest{WEBKIT_WEB_VIEW(g_object_ref(state->view))});
+    return true;
+}
+
 gboolean key_pressed(GtkEventControllerKey *, guint keyval, guint,
                      GdkModifierType modifiers, WindowState *state) {
     const bool control = (modifiers & GDK_CONTROL_MASK) != 0;
@@ -3561,23 +3681,16 @@ gboolean key_pressed(GtkEventControllerKey *, guint keyval, guint,
         }
         return FALSE;
     }
+    if (control && !shift && (keyval == GDK_KEY_v || keyval == GDK_KEY_V) && try_rich_image_paste(state))
+        return TRUE;
     if (control && keyval >= GDK_KEY_1 && keyval <= GDK_KEY_9) {
         const auto index = static_cast<std::size_t>(keyval - GDK_KEY_1);
         if (index < state->tabs.size()) select_tab(state->tabs[index].get());
         return TRUE;
     }
-    // Route paste explicitly through WebKit when page content owns focus.
-    // This matters for rich clipboard payloads (notably image/png screenshots)
-    // which websites consume through their normal paste event. Text paste keeps
-    // using the same WebKit editing command and non-page widgets are untouched.
-    if (control && !shift && (keyval == GDK_KEY_v || keyval == GDK_KEY_V) && state->view) {
-        GtkWidget *focus = gtk_window_get_focus(GTK_WINDOW(state->window));
-        GtkWidget *web_view = GTK_WIDGET(state->view);
-        if (focus == web_view || (focus && gtk_widget_is_ancestor(focus, web_view))) {
-            webkit_web_view_execute_editing_command(state->view, WEBKIT_EDITING_COMMAND_PASTE);
-            return TRUE;
-        }
-    }
+    // Do not replace WebKit's native Ctrl+V for ordinary clipboard data.
+    // A separate image-only fallback below is installed at the window level
+    // for GTK screenshot clipboards that WebKitGTK does not expose as Files.
     if (control && (keyval == GDK_KEY_l || keyval == GDK_KEY_L)) {
         focus_and_select_address(state);
         return TRUE;
