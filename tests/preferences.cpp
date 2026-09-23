@@ -30,7 +30,8 @@ int main() {
     assert(!vantage::compatibility_video_rendering());
     vantage::apply_video_rendering_environment(false);
     assert(std::getenv("WEBKIT_DISABLE_COMPOSITING_MODE") == nullptr);
-    assert(std::string(std::getenv("WEBKIT_DISABLE_DMABUF_RENDERER")) == "1");
+    assert(std::getenv("WEBKIT_DISABLE_DMABUF_RENDERER") == nullptr);
+    assert(std::string(std::getenv("WEBKIT_GST_DMABUF_SINK_DISABLED")) == "1");
 
     vantage::set_compatibility_video_rendering(true);
     assert(vantage::compatibility_video_rendering());

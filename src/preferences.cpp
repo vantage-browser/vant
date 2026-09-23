@@ -92,18 +92,24 @@ void set_compatibility_video_rendering(bool enabled) {
 
 void apply_video_rendering_environment(bool enabled) {
     if (enabled) {
-        if (unsetenv("WEBKIT_DISABLE_DMABUF_RENDERER") != 0)
+        if (unsetenv("WEBKIT_DISABLE_DMABUF_RENDERER") != 0 ||
+            unsetenv("WEBKIT_GST_DMABUF_SINK_DISABLED") != 0)
             throw std::runtime_error("cannot reset compatibility video rendering");
         if (setenv("WEBKIT_DISABLE_COMPOSITING_MODE", "1", 1) != 0)
             throw std::runtime_error("cannot enable compatibility video rendering");
     } else {
+        // Keep WebKit's normal accelerated compositor and GTK DMA-BUF renderer.
+        // Disabling the compositor is a known WebKitGTK crash path on complex
+        // pages (Google auth/ChatGPT), while disabling the *renderer* has also
+        // caused page/video crashes in WebKitGTK.  The media regression is in
+        // the GStreamer DMA-BUF video-sink path, so isolate the workaround to
+        // that path instead of changing page compositing.
         if (unsetenv("WEBKIT_DISABLE_COMPOSITING_MODE") != 0)
             throw std::runtime_error("cannot enable accelerated video rendering");
-        // Keep compositing enabled, but avoid the DMA-BUF renderer. This targets
-        // the WebKitGTK/Wayland media rendering path without reintroducing the
-        // WEBKIT_DISABLE_COMPOSITING_MODE crash class.
-        if (setenv("WEBKIT_DISABLE_DMABUF_RENDERER", "1", 1) != 0)
-            throw std::runtime_error("cannot enable safe accelerated rendering");
+        if (unsetenv("WEBKIT_DISABLE_DMABUF_RENDERER") != 0)
+            throw std::runtime_error("cannot enable the normal WebKit renderer");
+        if (setenv("WEBKIT_GST_DMABUF_SINK_DISABLED", "1", 1) != 0)
+            throw std::runtime_error("cannot enable safe media rendering");
     }
 }
 
