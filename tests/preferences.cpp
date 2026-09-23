@@ -20,6 +20,11 @@ int main() {
         legacy << "compatibility_video_rendering=1\n";
     }
     assert(!vantage::compatibility_video_rendering());
+    {
+        std::ofstream legacy_v2(root / "vantage-browser" / "preferences.conf");
+        legacy_v2 << "compatibility_video_rendering_v2=1\n";
+    }
+    assert(!vantage::compatibility_video_rendering());
 
     vantage::set_compatibility_video_rendering(false);
     assert(!vantage::compatibility_video_rendering());

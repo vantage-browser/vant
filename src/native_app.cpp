@@ -686,6 +686,32 @@ void append_page_action(WebKitContextMenu *menu, TabState *tab, const char *labe
     g_object_unref(action);
 }
 
+struct ImageSaveData { TabState *tab{}; std::string uri; };
+
+void save_image(GSimpleAction *, GVariant *, void *data) {
+    const auto *save = static_cast<const ImageSaveData *>(data);
+    if (!save->tab || save->tab->closing || !save->tab->view || save->uri.empty()) return;
+
+    // Start the transfer from the originating WebView, not from libsoup or the
+    // global WebContext.  This keeps WebKit's cookies, credentials, page/network
+    // session and blob URL ownership, which is required for authenticated and
+    // session-bound images such as ChatGPT chat images.
+    auto *download = webkit_web_view_download_uri(save->tab->view, save->uri.c_str());
+    if (!download) return;
+    g_object_set_data(G_OBJECT(download), "vantage-save-as", GINT_TO_POINTER(1));
+    g_object_unref(download);
+}
+
+void append_image_save(WebKitContextMenu *menu, TabState *tab, const char *uri) {
+    auto *action = g_simple_action_new("save-image", nullptr);
+    auto *data = new ImageSaveData{tab, uri ? uri : ""};
+    g_signal_connect_data(action, "activate", G_CALLBACK(save_image), data,
+        [](void *value, GClosure *) { delete static_cast<ImageSaveData *>(value); }, G_CONNECT_DEFAULT);
+    webkit_context_menu_append(menu,
+        webkit_context_menu_item_new_from_gaction(G_ACTION(action), "Save image as…", nullptr));
+    g_object_unref(action);
+}
+
 void append_context_open(WebKitContextMenu *menu, WindowState *window, const char *uri,
                          const char *label, ContextOpen mode, bool image = false) {
     auto *action = g_simple_action_new(mode == ContextOpen::tab ? "context-open-tab" : "context-open-window", nullptr);
@@ -728,8 +754,7 @@ gboolean context_menu(WebKitWebView *, WebKitContextMenu *menu,
         // otherwise non-public images (including ChatGPT chat images) work just
         // like normal web images.  The old Soup re-fetch bypassed WebKit's
         // session/cookies and failed on those resources.
-        webkit_context_menu_append(menu, webkit_context_menu_item_new_from_stock_action_with_label(
-            WEBKIT_CONTEXT_MENU_ACTION_DOWNLOAD_IMAGE_TO_DISK, "Save image as…"));
+        append_image_save(menu, tab, uri);
         webkit_context_menu_append(menu, webkit_context_menu_item_new_from_stock_action(
             WEBKIT_CONTEXT_MENU_ACTION_COPY_IMAGE_TO_CLIPBOARD));
         webkit_context_menu_append(menu, webkit_context_menu_item_new_from_stock_action(
@@ -2888,7 +2913,8 @@ void download_started(WebKitNetworkSession *, WebKitDownload *download, Applicat
         if (find_tab(window.get(), view)) {
             private_mode = window->private_mode;
             source_window = window.get();
-            prompt_destination = window->prompt_next_download;
+            prompt_destination = GPOINTER_TO_INT(
+                g_object_get_data(G_OBJECT(download), "vantage-save-as")) != 0 || window->prompt_next_download;
             window->prompt_next_download = false;
             break;
         }

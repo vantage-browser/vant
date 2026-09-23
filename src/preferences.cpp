@@ -75,17 +75,18 @@ std::filesystem::path preferences_path() { return config_root() / "vantage-brows
 
 bool compatibility_video_rendering() {
     const auto values = read_preferences();
-    const auto found = values.find("compatibility_video_rendering_v2");
-    // Keep accelerated compositing as the safe default. WebKitGTK has a known
-    // crash path when WEBKIT_DISABLE_COMPOSITING_MODE=1 on complex pages
-    // (notably authentication and media-heavy pages). Compatibility mode stays
-    // available as an explicit troubleshooting option only.
+    const auto found = values.find("compatibility_video_rendering_v3");
+    // v1/v2 compatibility rendering disabled WebKit compositing. That fixed
+    // media on some Wayland systems, but it also crashes complex pages such as
+    // Google authentication and YouTube History. Ignore the old keys so an
+    // existing profile cannot silently re-enable that crash path after an
+    // upgrade. Only an explicit v3 opt-in enables the legacy workaround.
     return found != values.end() && found->second == "1";
 }
 
 void set_compatibility_video_rendering(bool enabled) {
     auto values = read_preferences();
-    values["compatibility_video_rendering_v2"] = enabled ? "1" : "0";
+    values["compatibility_video_rendering_v3"] = enabled ? "1" : "0";
     write_preferences(values);
 }
 
