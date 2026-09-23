@@ -205,6 +205,113 @@ struct ApplicationState {
     }
 };
 
+struct MediaPermissionPrompt {
+    WebKitPermissionRequest *request{};
+    GtkWidget *dialog{};
+};
+
+std::string permission_origin(WebKitWebView *view) {
+    const char *uri = webkit_web_view_get_uri(view);
+    if (!uri) return "This page";
+    auto *parsed = g_uri_parse(uri, G_URI_FLAGS_NONE, nullptr);
+    if (!parsed) return uri;
+    const char *scheme = g_uri_get_scheme(parsed);
+    const char *host = g_uri_get_host(parsed);
+    const int port = g_uri_get_port(parsed);
+    std::string origin;
+    if (scheme && host) {
+        origin = std::string(scheme) + "://" + host;
+        const bool default_port = (std::string_view(scheme) == "https" && port == 443) ||
+                                  (std::string_view(scheme) == "http" && port == 80);
+        if (port > 0 && !default_port) origin += ':' + std::to_string(port);
+    } else origin = uri;
+    g_uri_unref(parsed);
+    return origin;
+}
+
+void finish_media_permission(MediaPermissionPrompt *prompt, bool allow) {
+    if (allow) webkit_permission_request_allow(prompt->request);
+    else webkit_permission_request_deny(prompt->request);
+    g_object_unref(prompt->request);
+    prompt->request = nullptr;
+    g_signal_handlers_disconnect_by_data(prompt->dialog, prompt);
+    gtk_window_destroy(GTK_WINDOW(prompt->dialog));
+    delete prompt;
+}
+
+void allow_media_permission(GtkButton *, MediaPermissionPrompt *prompt) {
+    finish_media_permission(prompt, true);
+}
+
+void deny_media_permission(GtkButton *, MediaPermissionPrompt *prompt) {
+    finish_media_permission(prompt, false);
+}
+
+gboolean permission_requested(WebKitWebView *view, WebKitPermissionRequest *request, TabState *tab) {
+    // Only intercept getUserMedia here. Other WebKit permission request types
+    // deliberately continue through their existing/default paths.
+    if (!WEBKIT_IS_USER_MEDIA_PERMISSION_REQUEST(request)) return FALSE;
+
+    auto *media = WEBKIT_USER_MEDIA_PERMISSION_REQUEST(request);
+    const bool audio = webkit_user_media_permission_is_for_audio_device(media);
+    const bool video = webkit_user_media_permission_is_for_video_device(media);
+    if (!audio && !video) return FALSE;
+
+    auto *prompt = new MediaPermissionPrompt{WEBKIT_PERMISSION_REQUEST(g_object_ref(request)), nullptr};
+    auto *dialog = gtk_window_new();
+    prompt->dialog = dialog;
+    gtk_window_set_title(GTK_WINDOW(dialog), "Camera and microphone permission");
+    gtk_window_set_transient_for(GTK_WINDOW(dialog), GTK_WINDOW(tab->window->window));
+    gtk_window_set_modal(GTK_WINDOW(dialog), TRUE);
+    gtk_window_set_resizable(GTK_WINDOW(dialog), FALSE);
+    gtk_window_set_destroy_with_parent(GTK_WINDOW(dialog), TRUE);
+    gtk_window_set_default_size(GTK_WINDOW(dialog), 420, -1);
+
+    auto *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
+    gtk_widget_set_margin_top(box, 18);
+    gtk_widget_set_margin_bottom(box, 18);
+    gtk_widget_set_margin_start(box, 18);
+    gtk_widget_set_margin_end(box, 18);
+
+    const char *kind = audio && video ? "camera and microphone" : video ? "camera" : "microphone";
+    auto *heading = gtk_label_new((std::string("Allow ") + permission_origin(view) + " to use your " + kind + "?").c_str());
+    gtk_label_set_wrap(GTK_LABEL(heading), TRUE);
+    gtk_widget_set_halign(heading, GTK_ALIGN_START);
+    gtk_widget_add_css_class(heading, "title-3");
+    gtk_box_append(GTK_BOX(box), heading);
+
+    auto *detail = gtk_label_new("Access lasts for this request. Closing this prompt denies access.");
+    gtk_label_set_wrap(GTK_LABEL(detail), TRUE);
+    gtk_widget_set_halign(detail, GTK_ALIGN_START);
+    gtk_widget_add_css_class(detail, "dim-label");
+    gtk_box_append(GTK_BOX(box), detail);
+
+    auto *actions = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_widget_set_halign(actions, GTK_ALIGN_END);
+    auto *deny = gtk_button_new_with_label("Deny");
+    auto *allow = gtk_button_new_with_label("Allow");
+    gtk_widget_add_css_class(allow, "suggested-action");
+    gtk_box_append(GTK_BOX(actions), deny);
+    gtk_box_append(GTK_BOX(actions), allow);
+    gtk_box_append(GTK_BOX(box), actions);
+    gtk_window_set_child(GTK_WINDOW(dialog), box);
+
+    g_signal_connect(allow, "clicked", G_CALLBACK(allow_media_permission), prompt);
+    g_signal_connect(deny, "clicked", G_CALLBACK(deny_media_permission), prompt);
+    g_signal_connect(dialog, "close-request", G_CALLBACK(+[](GtkWindow *, gpointer data) -> gboolean {
+        auto *p = static_cast<MediaPermissionPrompt *>(data);
+        if (p->request) {
+            webkit_permission_request_deny(p->request);
+            g_object_unref(p->request);
+            p->request = nullptr;
+        }
+        delete p;
+        return FALSE;
+    }), prompt);
+    gtk_window_present(GTK_WINDOW(dialog));
+    return TRUE;
+}
+
 void sync_active_chrome(WindowState *state);
 TabState *find_tab(WindowState *state, WebKitWebView *view);
 TabState *new_tab(WindowState *state, const std::string &uri, bool load_initial = true);
@@ -3242,6 +3349,7 @@ TabState *new_tab(WindowState *state, const std::string &uri, bool load_initial)
     g_signal_connect(tab->view, "load-failed", G_CALLBACK(load_failed), tab);
     g_signal_connect(tab->view, "web-process-terminated", G_CALLBACK(web_process_terminated), tab);
     g_signal_connect(tab->view, "decide-policy", G_CALLBACK(decide_policy), tab);
+    g_signal_connect(tab->view, "permission-request", G_CALLBACK(permission_requested), tab);
     g_signal_connect(tab->view, "context-menu", G_CALLBACK(context_menu), tab);
     g_signal_connect(tab->view, "load-failed-with-tls-errors", G_CALLBACK(tls_failed), tab);
     g_signal_connect(webkit_web_view_get_find_controller(tab->view), "counted-matches",
