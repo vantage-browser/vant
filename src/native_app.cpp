@@ -169,6 +169,7 @@ struct WindowState {
     unsigned find_total{};
     unsigned find_generation{};
     bool custom_find{};
+    bool prompt_next_download{};
     guint tab_drop_animation{};
     int tab_drop_width{};
     ~WindowState() {
@@ -701,6 +702,10 @@ gboolean context_menu(WebKitWebView *, WebKitContextMenu *menu,
     const bool link = webkit_hit_test_result_context_is_link(hit);
     const bool image = webkit_hit_test_result_context_is_image(hit);
     const bool selection = webkit_hit_test_result_context_is_selection(hit);
+    // Arm Save As while an image context menu is active. The stock WebKit
+    // download action retains page/session/blob context; download_started()
+    // consumes this flag and presents Vantage's file chooser.
+    tab->window->prompt_next_download = image;
     webkit_context_menu_remove_all(menu);
     webkit_context_menu_append(menu, webkit_context_menu_item_new_from_stock_action(WEBKIT_CONTEXT_MENU_ACTION_GO_BACK));
     webkit_context_menu_append(menu, webkit_context_menu_item_new_from_stock_action(WEBKIT_CONTEXT_MENU_ACTION_GO_FORWARD));
@@ -742,6 +747,12 @@ gboolean context_menu(WebKitWebView *, WebKitContextMenu *menu,
     webkit_context_menu_append(menu, webkit_context_menu_item_new_from_stock_action(
         WEBKIT_CONTEXT_MENU_ACTION_INSPECT_ELEMENT));
     return FALSE;
+}
+
+void context_menu_dismissed(WebKitWebView *, TabState *tab) {
+    // Save Image starts its download before dismissal and consumes the flag.
+    // Other menu choices must not affect a later unrelated download.
+    if (tab && tab->window) tab->window->prompt_next_download = false;
 }
 
 std::int64_t now_seconds() {
@@ -2351,6 +2362,8 @@ struct DownloadContext {
     bool failed{};
     bool cancelled{};
     bool private_mode{};
+    bool prompt_destination{};
+    WindowState *window{};
     std::string destination;
     std::string suggested_name;
 };
@@ -2743,8 +2756,34 @@ gboolean window_closing(GtkWindow *, WindowState *state) {
     return FALSE;
 }
 
+void download_save_dialog_finished(GObject *source, GAsyncResult *result, void *data) {
+    auto *context = static_cast<DownloadContext *>(data);
+    GError *error = nullptr;
+    auto *file = gtk_file_dialog_save_finish(GTK_FILE_DIALOG(source), result, &error);
+    if (file) {
+        auto *uri = g_file_get_uri(file);
+        if (uri) { webkit_download_set_destination(context->download, uri); g_free(uri); }
+        g_object_unref(file);
+    } else {
+        context->cancelled = true;
+        webkit_download_cancel(context->download);
+    }
+    if (error) g_error_free(error);
+    g_object_unref(source);
+}
+
 gboolean download_destination(WebKitDownload *download, const char *suggested, DownloadContext *context) {
     context->suggested_name = suggested && *suggested ? suggested : "Download";
+    if (context->prompt_destination && context->window && !context->window->closed) {
+        auto *dialog = gtk_file_dialog_new();
+        gtk_file_dialog_set_title(dialog, "Save image as");
+        gtk_file_dialog_set_initial_name(dialog, context->suggested_name.c_str());
+        g_object_ref(dialog);
+        gtk_file_dialog_save(dialog, GTK_WINDOW(context->window->window), nullptr,
+            download_save_dialog_finished, context);
+        g_object_unref(dialog);
+        return TRUE;
+    }
     const char *source = webkit_uri_request_get_uri(webkit_download_get_request(download));
     const bool needs_safe_name = !suggested || std::string_view(suggested).size() > 180 ||
         (source && g_str_has_prefix(source, "data:"));
@@ -2843,9 +2882,19 @@ void download_finished(WebKitDownload *download, DownloadContext *context) {
 void download_started(WebKitNetworkSession *, WebKitDownload *download, ApplicationState *owner) {
     auto *view = webkit_download_get_web_view(download);
     bool private_mode = false;
-    for (const auto &window : owner->windows)
-        if (find_tab(window.get(), view)) { private_mode = window->private_mode; break; }
-    auto *context = new DownloadContext{owner, WEBKIT_DOWNLOAD(g_object_ref(download)), 0, false, false, private_mode, {}, {}};
+    bool prompt_destination = false;
+    WindowState *source_window = nullptr;
+    for (const auto &window : owner->windows) {
+        if (find_tab(window.get(), view)) {
+            private_mode = window->private_mode;
+            source_window = window.get();
+            prompt_destination = window->prompt_next_download;
+            window->prompt_next_download = false;
+            break;
+        }
+    }
+    auto *context = new DownloadContext{owner, WEBKIT_DOWNLOAD(g_object_ref(download)), 0, false, false,
+        private_mode, prompt_destination, source_window, {}, {}};
     owner->active_downloads.push_back(context);
     refresh_download_chrome(owner);
     g_signal_connect(download, "decide-destination", G_CALLBACK(download_destination), context);
@@ -3324,7 +3373,13 @@ TabState *new_tab(WindowState *state, const std::string &uri, bool load_initial)
     gtk_box_append(GTK_BOX(hover_surface), close);
     gtk_box_append(GTK_BOX(tab->body), hover_surface);
     gtk_overlay_add_overlay(GTK_OVERLAY(tab->tab), tab->body);
-    GtkWidget *previous = state->tabs.empty() ? nullptr : state->tabs.back()->tab;
+    // New tabs belong next to the tab that spawned them, matching normal
+    // browser behaviour for Ctrl/middle-click and “Open link in new tab”.
+    auto active = std::find_if(state->tabs.begin(), state->tabs.end(),
+        [state](const auto &candidate) { return candidate->view == state->view; });
+    const auto insert_index = active == state->tabs.end()
+        ? state->tabs.size() : static_cast<std::size_t>(std::distance(state->tabs.begin(), active)) + 1;
+    GtkWidget *previous = insert_index == 0 ? nullptr : state->tabs[insert_index - 1]->tab;
     gtk_box_insert_child_after(GTK_BOX(state->tab_box), tab->tab, previous);
 
     auto *tab_motion = gtk_event_controller_motion_new();
@@ -3357,11 +3412,12 @@ TabState *new_tab(WindowState *state, const std::string &uri, bool load_initial)
     g_signal_connect(tab->view, "decide-policy", G_CALLBACK(decide_policy), tab);
     g_signal_connect(tab->view, "permission-request", G_CALLBACK(permission_requested), tab);
     g_signal_connect(tab->view, "context-menu", G_CALLBACK(context_menu), tab);
+    g_signal_connect(tab->view, "context-menu-dismissed", G_CALLBACK(context_menu_dismissed), tab);
     g_signal_connect(tab->view, "load-failed-with-tls-errors", G_CALLBACK(tls_failed), tab);
     g_signal_connect(webkit_web_view_get_find_controller(tab->view), "counted-matches",
         G_CALLBACK(find_counted), state);
 
-    state->tabs.push_back(std::move(owned));
+    state->tabs.insert(state->tabs.begin() + static_cast<std::ptrdiff_t>(insert_index), std::move(owned));
     select_tab(tab);
     auto *session = webkit_web_view_get_network_session(tab->view);
     auto *data_manager = webkit_network_session_get_website_data_manager(session);

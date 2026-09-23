@@ -76,10 +76,11 @@ std::filesystem::path preferences_path() { return config_root() / "vantage-brows
 bool compatibility_video_rendering() {
     const auto values = read_preferences();
     const auto found = values.find("compatibility_video_rendering_v2");
-    // Compatibility rendering is the certified default: it avoids the
-    // audio-without-video/media sizing regressions seen on YouTube and X.
-    // Users can still explicitly opt into accelerated compositing.
-    return found == values.end() || found->second == "1";
+    // Keep accelerated compositing as the safe default. WebKitGTK has a known
+    // crash path when WEBKIT_DISABLE_COMPOSITING_MODE=1 on complex pages
+    // (notably authentication and media-heavy pages). Compatibility mode stays
+    // available as an explicit troubleshooting option only.
+    return found != values.end() && found->second == "1";
 }
 
 void set_compatibility_video_rendering(bool enabled) {
@@ -90,10 +91,19 @@ void set_compatibility_video_rendering(bool enabled) {
 
 void apply_video_rendering_environment(bool enabled) {
     if (enabled) {
+        if (unsetenv("WEBKIT_DISABLE_DMABUF_RENDERER") != 0)
+            throw std::runtime_error("cannot reset compatibility video rendering");
         if (setenv("WEBKIT_DISABLE_COMPOSITING_MODE", "1", 1) != 0)
             throw std::runtime_error("cannot enable compatibility video rendering");
-    } else if (unsetenv("WEBKIT_DISABLE_COMPOSITING_MODE") != 0)
-        throw std::runtime_error("cannot enable accelerated video rendering");
+    } else {
+        if (unsetenv("WEBKIT_DISABLE_COMPOSITING_MODE") != 0)
+            throw std::runtime_error("cannot enable accelerated video rendering");
+        // Keep compositing enabled, but avoid the DMA-BUF renderer. This targets
+        // the WebKitGTK/Wayland media rendering path without reintroducing the
+        // WEBKIT_DISABLE_COMPOSITING_MODE crash class.
+        if (setenv("WEBKIT_DISABLE_DMABUF_RENDERER", "1", 1) != 0)
+            throw std::runtime_error("cannot enable safe accelerated rendering");
+    }
 }
 
 std::vector<std::string> dark_mode_enabled_domains() {
