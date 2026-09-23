@@ -2895,14 +2895,55 @@ gboolean address_file_dropped(GtkDropTarget *, const GValue *value, double, doub
     return TRUE;
 }
 
+struct FileTabDropTarget {
+    TabState *tab{};
+    std::size_t insertion{};
+    bool insert_new{};
+};
+
+FileTabDropTarget file_tab_drop_target(WindowState *state, double x, double y) {
+    // Keep the middle of a tab as an "open in this tab" target, while the
+    // outer quarters act as insertion gutters. This preserves the existing
+    // drop-on-tab behaviour and also makes every gap between tabs reachable.
+    for (std::size_t index = 0; index < state->tabs.size(); ++index) {
+        auto *tab = state->tabs[index].get();
+        graphene_rect_t bounds;
+        if (!gtk_widget_compute_bounds(tab->tab, state->tab_strip, &bounds)) continue;
+        if (x < bounds.origin.x || x > bounds.origin.x + bounds.size.width ||
+            y < bounds.origin.y || y > bounds.origin.y + bounds.size.height) continue;
+        const double local_x = x - bounds.origin.x;
+        if (local_x < bounds.size.width * 0.25) return {nullptr, index, true};
+        if (local_x > bounds.size.width * 0.75) return {nullptr, index + 1, true};
+        return {tab, index, false};
+    }
+    return {nullptr, tab_drop_position(state, state->tab_strip, x), true};
+}
+
+GdkDragAction tab_strip_file_drag_motion(GtkDropTarget *, double x, double y, WindowState *state) {
+    const auto target = file_tab_drop_target(state, x, y);
+    if (target.insert_new) show_tab_drop_placeholder(state, target.insertion);
+    else clear_tab_drop_placeholder(state);
+    return GDK_ACTION_COPY;
+}
+
+void tab_strip_file_drag_left(GtkDropTarget *, WindowState *state) {
+    clear_tab_drop_placeholder(state);
+}
+
 gboolean tab_strip_file_dropped(GtkDropTarget *, const GValue *value, double x, double y, WindowState *state) {
     const auto uri = first_file_uri(value);
-    if (uri.empty()) return FALSE;
-    if (auto *tab = tab_at(state, state->tab_strip, x, y)) {
-        load_decision(tab, state->policy.resolve(uri));
-        select_tab(tab);
+    if (uri.empty()) {
+        clear_tab_drop_placeholder(state);
+        return FALSE;
+    }
+    const auto target = file_tab_drop_target(state, x, y);
+    clear_tab_drop_placeholder(state);
+    if (!target.insert_new && target.tab) {
+        load_decision(target.tab, state->policy.resolve(uri));
+        select_tab(target.tab);
     } else {
-        new_tab(state, uri);
+        auto *tab = new_tab(state, uri);
+        if (tab) move_tab_to_window(tab, state, target.insertion);
     }
     return TRUE;
 }
@@ -3662,6 +3703,8 @@ void create_window(ApplicationState *owner, const std::string &initial_uri, bool
         g_signal_connect(tab_drop, "drop", G_CALLBACK(tab_dropped), state);
         gtk_widget_add_controller(tab_strip, GTK_EVENT_CONTROLLER(tab_drop));
         auto *tab_file_drop = gtk_drop_target_new(GDK_TYPE_FILE_LIST, GDK_ACTION_COPY);
+        g_signal_connect(tab_file_drop, "motion", G_CALLBACK(tab_strip_file_drag_motion), state);
+        g_signal_connect(tab_file_drop, "leave", G_CALLBACK(tab_strip_file_drag_left), state);
         g_signal_connect(tab_file_drop, "drop", G_CALLBACK(tab_strip_file_dropped), state);
         gtk_widget_add_controller(tab_strip, GTK_EVENT_CONTROLLER(tab_file_drop));
     }
