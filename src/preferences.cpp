@@ -76,7 +76,10 @@ std::filesystem::path preferences_path() { return config_root() / "vantage-brows
 bool compatibility_video_rendering() {
     const auto values = read_preferences();
     const auto found = values.find("compatibility_video_rendering_v2");
-    return found != values.end() && found->second == "1";
+    // Compatibility rendering is the certified default: it avoids the
+    // audio-without-video/media sizing regressions seen on YouTube and X.
+    // Users can still explicitly opt into accelerated compositing.
+    return found == values.end() || found->second == "1";
 }
 
 void set_compatibility_video_rendering(bool enabled) {

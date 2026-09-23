@@ -10,16 +10,16 @@ int main() {
     std::filesystem::remove_all(root);
     assert(setenv("VANT_CONFIG_HOME", root.c_str(), 1) == 0);
 
-    assert(!vantage::compatibility_video_rendering());
+    assert(vantage::compatibility_video_rendering());
 
-    // Legacy profiles used compatibility mode by default.  They must migrate
-    // to accelerated compositing rather than retaining the crash-prone mode.
+    // Legacy profiles used compatibility mode by default. Keep that known-good
+    // media behaviour unless the user explicitly selects accelerated mode.
     std::filesystem::create_directories(root / "vantage-browser");
     {
         std::ofstream legacy(root / "vantage-browser" / "preferences.conf");
         legacy << "compatibility_video_rendering=1\n";
     }
-    assert(!vantage::compatibility_video_rendering());
+    assert(vantage::compatibility_video_rendering());
 
     vantage::set_compatibility_video_rendering(false);
     assert(!vantage::compatibility_video_rendering());

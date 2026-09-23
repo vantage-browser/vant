@@ -84,6 +84,7 @@ struct TabState {
     vantage::TabId id{};
     WindowState *window{};
     GtkWidget *page{};
+    GtkWidget *inspector_view{};
     WebKitWebView *view{};
     GtkWidget *tab{};
     GtkWidget *body{};
@@ -530,119 +531,6 @@ void show_find(WindowState *state) {
 
 enum class ContextOpen { tab, window };
 struct ContextOpenData { WindowState *window{}; std::string uri; ContextOpen mode{}; bool image{}; };
-struct ImageAction { WindowState *window{}; std::string uri; bool save{}; };
-
-GBytes *decode_data_uri(const std::string &uri) {
-    const auto comma = uri.find(',');
-    if (comma == std::string::npos) return nullptr;
-    const auto metadata = std::string_view(uri).substr(0, comma);
-    if (metadata.ends_with(";base64")) {
-        gsize size = 0;
-        auto *decoded = g_base64_decode(uri.c_str() + comma + 1, &size);
-        return g_bytes_new_take(decoded, size);
-    }
-    auto *decoded = g_uri_unescape_string(uri.c_str() + comma + 1, nullptr);
-    return decoded ? g_bytes_new_take(decoded, std::strlen(decoded)) : nullptr;
-}
-
-struct SaveImageData { GtkFileDialog *dialog{}; GBytes *bytes{}; };
-
-void image_save_chosen(GObject *source, GAsyncResult *result, void *data) {
-    auto *save = static_cast<SaveImageData *>(data);
-    GError *error = nullptr;
-    auto *file = gtk_file_dialog_save_finish(GTK_FILE_DIALOG(source), result, &error);
-    if (file) {
-        gsize size = 0;
-        const auto *bytes = static_cast<const char *>(g_bytes_get_data(save->bytes, &size));
-        g_file_replace_contents(file, bytes, size, nullptr, FALSE, G_FILE_CREATE_REPLACE_DESTINATION,
-            nullptr, nullptr, &error);
-        g_object_unref(file);
-    }
-    if (error) g_error_free(error);
-    g_bytes_unref(save->bytes);
-    g_object_unref(save->dialog);
-    delete save;
-}
-
-void use_image_bytes(WindowState *window, const std::string &uri, bool save_image, GBytes *bytes) {
-    if (!bytes) return;
-    if (!save_image) {
-        GError *error = nullptr;
-        auto *texture = gdk_texture_new_from_bytes(bytes, &error);
-        if (texture) {
-            gdk_clipboard_set_texture(gtk_widget_get_clipboard(window->window), texture);
-            g_object_unref(texture);
-        } else {
-            const auto semicolon = uri.find(';');
-            const std::string mime = uri.starts_with("data:") && semicolon != std::string::npos
-                ? uri.substr(5, semicolon - 5) : "image/png";
-            auto *provider = gdk_content_provider_new_for_bytes(mime.c_str(), bytes);
-            gdk_clipboard_set_content(gtk_widget_get_clipboard(window->window), provider);
-            g_object_unref(provider);
-        }
-        if (error) g_error_free(error);
-        g_bytes_unref(bytes);
-        return;
-    }
-    auto *dialog = gtk_file_dialog_new();
-    gtk_file_dialog_set_title(dialog, "Save image as");
-    const auto semicolon = uri.find(';');
-    const auto mime = semicolon == std::string::npos ? std::string{} : uri.substr(11, semicolon - 11);
-    const std::string extension = mime == "png" ? ".png" : mime == "webp" ? ".webp" :
-        mime == "jpeg" ? ".jpg" : mime == "svg+xml" ? ".svg" : ".img";
-    std::string name = "image" + extension;
-    if (!uri.starts_with("data:")) {
-        auto source = uri.substr(0, uri.find_first_of("?#"));
-        const auto slash = source.find_last_of('/');
-        if (slash != std::string::npos && slash + 1 < source.size()) name = source.substr(slash + 1);
-    }
-    gtk_file_dialog_set_initial_name(dialog, name.c_str());
-    auto *save = new SaveImageData{GTK_FILE_DIALOG(g_object_ref(dialog)), bytes};
-    gtk_file_dialog_save(dialog, GTK_WINDOW(window->window), nullptr, image_save_chosen, save);
-    g_object_unref(dialog);
-}
-
-struct ImageFetch { WindowState *window{}; std::string uri; bool save{}; SoupSession *session{}; };
-
-void image_fetched(GObject *source, GAsyncResult *result, void *data) {
-    auto *fetch = static_cast<ImageFetch *>(data);
-    GError *error = nullptr;
-    auto *bytes = soup_session_send_and_read_finish(SOUP_SESSION(source), result, &error);
-    if (bytes) use_image_bytes(fetch->window, fetch->uri, fetch->save, bytes);
-    if (error) g_error_free(error);
-    g_object_unref(fetch->session);
-    delete fetch;
-}
-
-void image_action(GSimpleAction *, GVariant *, void *data) {
-    const auto *action = static_cast<const ImageAction *>(data);
-    if (action->uri.starts_with("data:image/")) {
-        auto *bytes = decode_data_uri(action->uri);
-        use_image_bytes(action->window, action->uri, action->save, bytes);
-        return;
-    }
-    auto *message = soup_message_new("GET", action->uri.c_str());
-    if (!message) return;
-    const char *page = action->window->view ? webkit_web_view_get_uri(action->window->view) : nullptr;
-    if (page) soup_message_headers_replace(soup_message_get_request_headers(message), "Referer", page);
-    auto *session = soup_session_new();
-    auto *fetch = new ImageFetch{action->window, action->uri, action->save,
-        SOUP_SESSION(g_object_ref(session))};
-    soup_session_send_and_read_async(session, message, G_PRIORITY_DEFAULT, nullptr, image_fetched, fetch);
-    g_object_unref(message);
-    g_object_unref(session);
-}
-
-void append_image_data_action(WebKitContextMenu *menu, WindowState *window, const char *uri,
-                              const char *label, bool save) {
-    auto *action = g_simple_action_new(save ? "save-data-image" : "copy-data-image", nullptr);
-    auto *data = new ImageAction{window, uri ? uri : "", save};
-    g_signal_connect_data(action, "activate", G_CALLBACK(image_action), data,
-        [](void *value, GClosure *) { delete static_cast<ImageAction *>(value); }, G_CONNECT_DEFAULT);
-    webkit_context_menu_append(menu, webkit_context_menu_item_new_from_gaction(G_ACTION(action), label, nullptr));
-    g_object_unref(action);
-}
-
 void context_open(GSimpleAction *, GVariant *, void *data) {
     const auto *open = static_cast<const ContextOpenData *>(data);
     if (open->image) {
@@ -668,10 +556,44 @@ void context_open(GSimpleAction *, GVariant *, void *data) {
 
 enum class PageActionKind { save, print, source };
 
+gboolean inspector_attach(WebKitWebInspector *inspector, TabState *tab) {
+    if (!tab || tab->closing || !tab->page) return FALSE;
+    auto *view = GTK_WIDGET(webkit_web_inspector_get_web_view(inspector));
+    if (!view) return FALSE;
+
+    // Keep DevTools as part of Vantage's tab instead of letting WebKit choose
+    // its default bottom attachment.  Right-side docking is an intentional UI
+    // invariant: do not replace this with the default inspector attachment.
+    if (gtk_widget_get_parent(view)) gtk_widget_unparent(view);
+    tab->inspector_view = view;
+    gtk_paned_set_end_child(GTK_PANED(tab->page), view);
+    gtk_widget_set_visible(view, TRUE);
+    const int width = gtk_widget_get_width(tab->page);
+    gtk_paned_set_position(GTK_PANED(tab->page), width > 800 ? (width * 3) / 5 : width / 2);
+    return TRUE;
+}
+
+gboolean inspector_detach(WebKitWebInspector *, TabState *tab) {
+    if (!tab || !tab->page || !tab->inspector_view) return FALSE;
+    if (gtk_paned_get_end_child(GTK_PANED(tab->page)) == tab->inspector_view)
+        gtk_paned_set_end_child(GTK_PANED(tab->page), nullptr);
+    tab->inspector_view = nullptr;
+    return FALSE;
+}
+
+void inspector_closed(WebKitWebInspector *, TabState *tab) {
+    if (!tab || !tab->page) return;
+    if (tab->inspector_view && gtk_paned_get_end_child(GTK_PANED(tab->page)) == tab->inspector_view)
+        gtk_paned_set_end_child(GTK_PANED(tab->page), nullptr);
+    tab->inspector_view = nullptr;
+}
+
 void show_devtools(TabState *tab) {
     if (!tab || tab->closing || !tab->view) return;
     auto *inspector = webkit_web_view_get_inspector(tab->view);
-    if (inspector) webkit_web_inspector_show(inspector);
+    if (!inspector) return;
+    webkit_web_inspector_show(inspector);
+    if (!webkit_web_inspector_is_attached(inspector)) webkit_web_inspector_attach(inspector);
 }
 
 struct PageActionData { TabState *tab{}; PageActionKind kind{}; };
@@ -796,8 +718,15 @@ gboolean context_menu(WebKitWebView *, WebKitContextMenu *menu,
         const char *uri = webkit_hit_test_result_get_image_uri(hit);
         append_context_open(menu, tab->window, uri, "Open image in new tab", ContextOpen::tab, true);
         append_context_open(menu, tab->window, uri, "Open image in new window", ContextOpen::window, true);
-        append_image_data_action(menu, tab->window, uri, "Save image as…", true);
-        append_image_data_action(menu, tab->window, uri, "Copy image", false);
+        // Use WebKit's image actions here.  They operate on the image resource
+        // already owned by the page/network session, so authenticated, blob and
+        // otherwise non-public images (including ChatGPT chat images) work just
+        // like normal web images.  The old Soup re-fetch bypassed WebKit's
+        // session/cookies and failed on those resources.
+        webkit_context_menu_append(menu, webkit_context_menu_item_new_from_stock_action_with_label(
+            WEBKIT_CONTEXT_MENU_ACTION_DOWNLOAD_IMAGE_TO_DISK, "Save image as…"));
+        webkit_context_menu_append(menu, webkit_context_menu_item_new_from_stock_action(
+            WEBKIT_CONTEXT_MENU_ACTION_COPY_IMAGE_TO_CLIPBOARD));
         webkit_context_menu_append(menu, webkit_context_menu_item_new_from_stock_action(
             WEBKIT_CONTEXT_MENU_ACTION_COPY_IMAGE_URL_TO_CLIPBOARD));
     }
@@ -3328,8 +3257,18 @@ TabState *new_tab(WindowState *state, const std::string &uri, bool load_initial)
         WEBKIT_USER_CONTENT_INJECT_ALL_FRAMES, WEBKIT_USER_STYLE_LEVEL_USER, nullptr, nullptr);
     webkit_user_content_manager_add_style_sheet(webkit_web_view_get_user_content_manager(tab->view), find_style);
     webkit_user_style_sheet_unref(find_style);
-    tab->page = GTK_WIDGET(tab->view);
+    tab->page = gtk_paned_new(GTK_ORIENTATION_HORIZONTAL);
     gtk_widget_set_vexpand(tab->page, TRUE);
+    gtk_widget_set_hexpand(tab->page, TRUE);
+    gtk_paned_set_start_child(GTK_PANED(tab->page), GTK_WIDGET(tab->view));
+    gtk_paned_set_resize_start_child(GTK_PANED(tab->page), TRUE);
+    gtk_paned_set_shrink_start_child(GTK_PANED(tab->page), FALSE);
+    gtk_paned_set_resize_end_child(GTK_PANED(tab->page), TRUE);
+    gtk_paned_set_shrink_end_child(GTK_PANED(tab->page), FALSE);
+    auto *inspector = webkit_web_view_get_inspector(tab->view);
+    g_signal_connect(inspector, "attach", G_CALLBACK(inspector_attach), tab);
+    g_signal_connect(inspector, "detach", G_CALLBACK(inspector_detach), tab);
+    g_signal_connect(inspector, "closed", G_CALLBACK(inspector_closed), tab);
     // Work around WebKitGTK/GTK4 offering desktop files to pages as URI text.
     // A native file-list target lets Vantage preserve HTML File semantics.
     auto *file_drop = gtk_drop_target_new(GDK_TYPE_FILE_LIST, GDK_ACTION_COPY);
@@ -3337,7 +3276,7 @@ TabState *new_tab(WindowState *state, const std::string &uri, bool load_initial)
     g_signal_connect(file_drop, "motion", G_CALLBACK(web_file_drag_motion), tab);
     g_signal_connect(file_drop, "leave", G_CALLBACK(web_file_drag_leave), tab);
     g_signal_connect(file_drop, "drop", G_CALLBACK(web_file_dropped), tab);
-    gtk_widget_add_controller(tab->page, GTK_EVENT_CONTROLLER(file_drop));
+    gtk_widget_add_controller(GTK_WIDGET(tab->view), GTK_EVENT_CONTROLLER(file_drop));
     gtk_stack_add_child(GTK_STACK(state->stack), tab->page);
 
     tab->tab = gtk_overlay_new();
